@@ -1,0 +1,68 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.codex
+
+# IntelliJ / Android Studio
+*.iml
+.idea/
+!.idea/codeStyles/
+!.idea/codeStyles/Project.xml
+!.idea/codeStyles/codeStyleConfig.xml
+!.idea/inspectionProfiles/
+!.idea/inspectionProfiles/Project_Default.xml
+!.idea/runConfigurations.xml
+
+# VS Code
+.vscode/
+
+# Android / Gradle
+.gradle/
+.kotlin/
+build/
+*/build/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+
+# Java / Kotlin
+out/
+*.class
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc.*
+.python-version
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+site/
+.eggs/
+*.egg
+*.egg-info/
+pip-wheel-metadata/
+
+# Logs
+*.log
+
+# Local runtime data
+*.sqlite3
+Python_Logic/packets.db
+
+# Accidental nested repo created by GitHub Desktop
+Poker_BiFa_android/

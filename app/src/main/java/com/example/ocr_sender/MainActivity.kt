@@ -4,9 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
-import android.net.Uri
 import android.os.Bundle
-import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,15 +24,6 @@ class MainActivity : AppCompatActivity() {
                 startServiceWithData(result.resultCode, result.data!!)
             } else {
                 txtStatus.text = "Permesso cattura negato"
-            }
-        }
-
-    private val overlayPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            if (Settings.canDrawOverlays(this)) {
-                txtStatus.text = "Permesso overlay concesso. Ora puoi avviare la cattura."
-            } else {
-                txtStatus.text = "Permesso overlay negato."
             }
         }
 
@@ -58,23 +47,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkPermissionsAndStart() {
-        if (!Settings.canDrawOverlays(this)) {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
-            overlayPermissionLauncher.launch(intent)
-        } else {
-            val captureIntent = mediaProjectionManager.createScreenCaptureIntent()
-            screenCaptureLauncher.launch(captureIntent)
-        }
+        val captureIntent = mediaProjectionManager.createScreenCaptureIntent()
+        screenCaptureLauncher.launch(captureIntent)
     }
 
     private fun startServiceWithData(resultCode: Int, data: Intent) {
         val serviceIntent = Intent(this, MediaProjectionService::class.java).apply {
             putExtra(MediaProjectionService.EXTRA_RESULT_CODE, resultCode)
             putExtra(MediaProjectionService.EXTRA_DATA, data)
-            putExtra(MediaProjectionService.EXTRA_SHOW_OVERLAY, true) // Flag per l'overlay
+            putExtra(MediaProjectionService.EXTRA_SHOW_OVERLAY, false)
         }
         ContextCompat.startForegroundService(this, serviceIntent)
         txtStatus.text = "Servizio OCR avviato"

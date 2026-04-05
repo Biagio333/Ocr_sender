@@ -22,6 +22,16 @@ def get_table_cards(data: dict) -> list[dict]:
     return table.get("board_cards", data.get("cards", [])) or []
 
 
+def get_table_available_actions(data: dict) -> list[dict]:
+    table = get_table(data)
+    return table.get("available_actions", []) or []
+
+
+def get_table_amount_buttons(data: dict) -> list[dict]:
+    table = get_table(data)
+    return table.get("amount_buttons", []) or []
+
+
 def get_table_covered_cards(data: dict) -> list[dict]:
     table = get_table(data)
     if "covered_cards" in table:
@@ -60,6 +70,8 @@ def payload_summary(payload: dict) -> str:
     return (
         f"players={len(get_players(payload))}, "
         f"cards={len(get_table_cards(payload))}, "
+        f"actions={len(get_table_available_actions(payload))}, "
+        f"amount_btns={len(get_table_amount_buttons(payload))}, "
         f"covered={len(get_table_covered_cards(payload))}, "
         f"dealer={len(get_table_dealer_buttons(payload))}"
     )

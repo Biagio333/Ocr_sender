@@ -312,6 +312,11 @@ class TableBase:
     street_pot_amount: list[float] = field(default_factory=list)
     board_cards: list[dict] = field(default_factory=list)
     hero_cards: list[dict] = field(default_factory=list)
+    available_actions: list[dict] = field(default_factory=list)
+    amount_buttons: list[dict] = field(default_factory=list)
+    amount_value_text: str = ""
+    buttons_visible: bool = False
+    hero_to_act: bool = False
     players: list[PlayerBase] = field(default_factory=list)
     street: str = "unknown"
     BB_amount: float = 0.0

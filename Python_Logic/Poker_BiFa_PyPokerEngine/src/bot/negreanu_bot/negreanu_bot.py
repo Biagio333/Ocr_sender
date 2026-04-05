@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, List, Tuple, Dict, Any, Set
 import re
 from collections import Counter
 
@@ -136,7 +136,7 @@ def parse_card(card) -> Tuple[str, str]:
 
 
 def rank_to_index(rank: str) -> int:
-    return RANK_ORDER.index(RANK_MAP.get(rank, "2"))
+    return RANK_ORDER.index(RANK_MAP.get(str(rank).upper(), "2"))
 
 
 def card_rank_index(card) -> int:
@@ -175,6 +175,14 @@ def _safe_get(obj, name: str, default=None):
     return getattr(obj, name, default)
 
 
+def _norm_text(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _norm_pos(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
 def _all_rank_indices(cards) -> List[int]:
     return [card_rank_index(c) for c in cards]
 
@@ -206,11 +214,12 @@ def _effective_opponent_profile(opponents: List[Dict[str, Any]]) -> Dict[str, fl
     }
 
 
-def _opponents_in_positions(opponents: List[Dict[str, Any]], positions: set[str]) -> List[Dict[str, Any]]:
+def _opponents_in_positions(opponents: List[Dict[str, Any]], positions: Set[str]) -> List[Dict[str, Any]]:
+    pos_set = {_norm_pos(p) for p in positions}
     return [
         opp
         for opp in opponents
-        if str(opp.get("position", "")).upper() in positions
+        if _norm_pos(opp.get("position", "")) in pos_set
     ]
 
 
@@ -241,8 +250,8 @@ def _count_weak_limpers(opponents: List[Dict[str, Any]]) -> int:
     return sum(
         1
         for opp in opponents
-        if opp.get("last_action_kind") == "call"
-        and opp.get("last_action_street") == "preflop"
+        if _norm_text(opp.get("last_action_kind")) == "call"
+        and _norm_text(opp.get("last_action_street")) == "preflop"
         and _is_weak_passive_player(opp)
     )
 
@@ -250,7 +259,8 @@ def _count_weak_limpers(opponents: List[Dict[str, Any]]) -> int:
 def _count_short_stacks(opponents: List[Dict[str, Any]], threshold_bb: float = 15.0) -> int:
     count = 0
     for opp in opponents:
-        if _safe_float(opp.get("stack_bb", 0.0), 0.0) > 0 and _safe_float(opp.get("stack_bb", 0.0), 0.0) <= threshold_bb:
+        stack_bb = _safe_float(opp.get("stack_bb", 0.0), 0.0)
+        if 0 < stack_bb <= threshold_bb:
             count += 1
     return count
 
@@ -258,21 +268,22 @@ def _count_short_stacks(opponents: List[Dict[str, Any]], threshold_bb: float = 1
 def _count_big_stacks(opponents: List[Dict[str, Any]], threshold_bb: float = 45.0) -> int:
     count = 0
     for opp in opponents:
-        if _safe_float(opp.get("stack_bb", 0.0), 0.0) >= threshold_bb:
+        stack_bb = _safe_float(opp.get("stack_bb", 0.0), 0.0)
+        if stack_bb >= threshold_bb:
             count += 1
     return count
 
 
 def _is_late_position(position: str) -> bool:
-    return position in {"HJ", "CO", "BTN"}
+    return _norm_pos(position) in {"HJ", "CO", "BTN"}
 
 
 def _is_early_position(position: str) -> bool:
-    return position in {"UTG", "UTG+1", "EP"}
+    return _norm_pos(position) in {"UTG", "UTG+1", "EP"}
 
 
 def _is_blind(position: str) -> bool:
-    return position in {"SB", "BB"}
+    return _norm_pos(position) in {"SB", "BB"}
 
 
 def _has_heavy_preflop_resistance(stats_context: Optional[Dict[str, Any]]) -> bool:
@@ -486,6 +497,80 @@ def has_straight_draw(rank_values: List[int]) -> bool:
     return False
 
 
+def _straight_draw_windows(rank_values: List[int]) -> List[set[int]]:
+    vals = sorted(set(rank_values))
+    if not vals:
+        return []
+
+    expanded = list(vals)
+    if 12 in vals:
+        expanded = sorted(set(vals + [-1]))
+
+    windows: List[set[int]] = []
+    for i in range(len(expanded)):
+        window = expanded[i:i + 4]
+        if len(window) < 4:
+            break
+        if max(window) - min(window) <= 4:
+            windows.append(set(window))
+    return windows
+
+
+def has_flush_draw_with_hole(hole_cards, board_cards) -> bool:
+    if len(board_cards) < 3 or len(board_cards) >= 5:
+        return False
+
+    all_cards = list(hole_cards) + list(board_cards)
+
+    if has_flush(all_cards):
+        return False
+
+    all_suits = Counter(_all_suits(all_cards))
+    hole_suits = Counter(_all_suits(hole_cards))
+    board_suits = Counter(_all_suits(board_cards))
+
+    for suit, total_count in all_suits.items():
+        if total_count == 4:
+            if hole_suits.get(suit, 0) <= 0:
+                continue
+            if board_suits.get(suit, 0) >= 4:
+                continue
+            return True
+
+    return False
+
+
+def has_straight_draw_with_hole(hole_cards, board_cards) -> bool:
+    if len(board_cards) < 3 or len(board_cards) >= 5:
+        return False
+
+    all_cards = list(hole_cards) + list(board_cards)
+
+    all_ranks = _all_rank_indices(all_cards)
+    board_ranks = _all_rank_indices(board_cards)
+    hole_ranks = _all_rank_indices(hole_cards)
+
+    if has_straight(all_ranks):
+        return False
+
+    all_windows = _straight_draw_windows(all_ranks)
+    if not all_windows:
+        return False
+
+    board_windows = _straight_draw_windows(board_ranks)
+    board_window_sets = {frozenset(w) for w in board_windows}
+    hole_rank_set = set(hole_ranks)
+
+    for window in all_windows:
+        if not (window & hole_rank_set):
+            continue
+        if frozenset(window) in board_window_sets:
+            continue
+        return True
+
+    return False
+
+
 def _board_has_straight_draw(board_ranks: List[int]) -> bool:
     vals = sorted(set(board_ranks))
     if len(vals) < 3:
@@ -556,15 +641,21 @@ def classify_postflop(hole_cards, board_cards):
     full_house = counts[:2] == [3, 2] if len(counts) >= 2 else False
     quads = counts[0] >= 4 if counts else False
     flush = has_flush(all_cards)
-    flush_draw = has_flush_draw(all_cards)
     straight = has_straight(all_ranks)
-    straight_draw = has_straight_draw(all_ranks)
+
+    flush_draw_with_hole = has_flush_draw_with_hole(hole_cards, board_cards)
+    straight_draw_with_hole = has_straight_draw_with_hole(hole_cards, board_cards)
+    flush_draw = flush_draw_with_hole
+    straight_draw = straight_draw_with_hole
 
     pair_ranks = [r for r, c in all_counter.items() if c >= 2]
     trip_ranks = [r for r, c in all_counter.items() if c >= 3]
 
     board_pair = any(c >= 2 for c in board_counter.values())
     board_trips = any(c >= 3 for c in board_counter.values())
+    board_counts = sorted(board_counter.values(), reverse=True)
+    board_two_pair = board_counts[:2] == [2, 2] if len(board_counts) >= 2 else False
+    board_quads = any(c >= 4 for c in board_counter.values())
 
     pocket_pair = hole_ranks[0] == hole_ranks[1]
 
@@ -616,7 +707,7 @@ def classify_postflop(hole_cards, board_cards):
         overcards = sum(1 for r in hole_ranks if r > board_high)
 
     nut_flush_draw = False
-    if flush_draw:
+    if flush_draw_with_hole:
         suit_counts = Counter(_all_suits(all_cards))
         draw_suit = None
         for s, c in suit_counts.items():
@@ -631,30 +722,49 @@ def classify_postflop(hole_cards, board_cards):
             )
             nut_flush_draw = ace_of_draw
 
-    combo_draw = flush_draw and straight_draw
+    combo_draw = flush_draw_with_hole and straight_draw_with_hole
 
-    hand_from_board_only = False
+    board_flush = False
+    board_straight = False
+    board_full_house = False
     if board_cards:
         board_flush = has_flush(board_cards)
         board_straight = has_straight(board_ranks)
         board_full_house = len(board_cards) >= 5 and (
             sorted(Counter(board_ranks).values(), reverse=True)[:2] == [3, 2]
         )
-        if (board_flush or board_straight or board_full_house) and not any(
-            r in pair_ranks for r in hole_ranks
-        ):
-            hand_from_board_only = True
+
+    two_pair_with_hole = two_pair and not board_two_pair
+    straight_with_hole = straight and not board_straight
+    flush_with_hole = flush and not board_flush
+    full_house_with_hole = full_house and not board_full_house
+    quads_with_hole = quads and not board_quads
+
+    hand_from_board_only = any([
+        board_two_pair and two_pair and not two_pair_with_hole,
+        board_straight and straight and not straight_with_hole,
+        board_flush and flush and not flush_with_hole,
+        board_full_house and full_house and not full_house_with_hole,
+        board_quads and quads and not quads_with_hole,
+    ])
 
     return {
         "pair": pair,
         "two_pair": two_pair,
+        "two_pair_with_hole": two_pair_with_hole,
         "trips": trips,
         "straight": straight,
+        "straight_with_hole": straight_with_hole,
         "flush": flush,
+        "flush_with_hole": flush_with_hole,
         "full_house": full_house,
+        "full_house_with_hole": full_house_with_hole,
         "quads": quads,
+        "quads_with_hole": quads_with_hole,
         "flush_draw": flush_draw,
         "straight_draw": straight_draw,
+        "flush_draw_with_hole": flush_draw_with_hole,
+        "straight_draw_with_hole": straight_draw_with_hole,
         "top_pair": top_pair,
         "second_pair": second_pair,
         "weak_pair": weak_pair,
@@ -709,13 +819,13 @@ def _has_real_showdown_value(info: Dict[str, Any]) -> bool:
         info["second_pair"],
         info["weak_pair"],
         info["overpair"],
-        info["two_pair"],
+        info["two_pair_with_hole"],
         info["trips_with_hole"],
         info["set_made"],
-        info["straight"],
-        info["flush"],
-        info["full_house"],
-        info["quads"],
+        info["straight_with_hole"],
+        info["flush_with_hole"],
+        info["full_house_with_hole"],
+        info["quads_with_hole"],
     ])
 
 
@@ -732,19 +842,19 @@ def postflop_strength(hole_cards, board_cards, cfg: negreanu_BotConfig, players_
         score += 0.32 + (cfg.top_pair_bonus * info["kicker_strength"])
     if info["overpair"]:
         score += 0.42 + cfg.overpair_bonus
-    if info["two_pair"]:
+    if info["two_pair_with_hole"]:
         score += 0.60
     if info["trips_with_hole"]:
         score += 0.69
     if info["set_made"]:
         score += 0.82 + cfg.set_bonus
-    if info["straight"]:
+    if info["straight_with_hole"]:
         score += 0.78
-    if info["flush"]:
+    if info["flush_with_hole"]:
         score += 0.80
-    if info["full_house"]:
+    if info["full_house_with_hole"]:
         score += 0.94
-    if info["quads"]:
+    if info["quads_with_hole"]:
         score += 1.00
 
     if info["flush_draw"]:
@@ -822,16 +932,22 @@ class SmartParametricBot:
 
         pot = _estimate_pot(state, stats_context)
         call_amount = _safe_int(_safe_get(state, "checking_or_calling_amount", 0), 0)
+        street = _norm_text(street)
 
         if street == "preflop":
-            bb = _safe_float(stats_context.get("big_blind", 0.0), 0.0) if stats_context else 0.0
-            raise_count = _safe_int(stats_context.get("raise_count_before_action", 0), 0) if stats_context else 0
-            position = stats_context.get("position", "") if stats_context else ""
-            effective_stack_bb = _safe_float(stats_context.get("effective_stack_bb", 0.0), 0.0) if stats_context else 0.0
-            limper_count = _safe_int(stats_context.get("limper_count", 0), 0) if stats_context else 0
+            bb = _safe_float((stats_context or {}).get("big_blind", 0.0), 0.0)
+            raise_count = _safe_int((stats_context or {}).get("raise_count_before_action", 0), 0)
+            position = (stats_context or {}).get("position", "")
+            effective_stack_bb = _safe_float((stats_context or {}).get("effective_stack_bb", 0.0), 0.0)
+            limper_count = _safe_int((stats_context or {}).get("limper_count", 0), 0)
 
             if 0 < effective_stack_bb <= 10:
-                target = min(max_raise, stack)
+                if raise_count == 0:
+                    target = max(min_raise, int(round(bb * 2.5))) if bb > 0 else min_raise
+                elif strength >= 0.88:
+                    target = min(max_raise, stack)
+                else:
+                    target = max(min_raise, min(call_amount * 2, stack))
             elif bb > 0:
                 if raise_count == 0:
                     if limper_count > 0:
@@ -839,12 +955,17 @@ class SmartParametricBot:
                         if strength >= 0.80:
                             mult += 0.3
                     else:
-                        mult = 2.3 if _is_late_position(position) and effective_stack_bb >= 25 else 2.5 if _is_late_position(position) else 3.0
+                        if _is_late_position(position) and effective_stack_bb >= 25:
+                            mult = 2.3
+                        elif _is_late_position(position):
+                            mult = 2.5
+                        else:
+                            mult = 3.0
                         if _is_blind(position) or _is_early_position(position):
                             mult += 0.3
                     target = int(round(bb * mult))
                 else:
-                    if 0 < effective_stack_bb <= 12 and strength >= 0.74:
+                    if 0 < effective_stack_bb <= 12 and strength >= 0.88:
                         target = min(max_raise, stack)
                     else:
                         target = max(min_raise, call_amount * 3)
@@ -854,11 +975,11 @@ class SmartParametricBot:
         else:
             if pot > 0:
                 if strength >= 0.88:
-                    target = int(round(pot * 0.75))
+                    target = int(round(pot * 0.66))
                 elif strength >= 0.75:
-                    target = int(round(pot * 0.60))
+                    target = int(round(pot * 0.54))
                 else:
-                    target = int(round(pot * 0.50))
+                    target = int(round(pot * 0.40))
                 target = max(target, min_raise)
             else:
                 factor = _clamp((self.config.aggression * 0.45) + (strength * 0.35), 0.20, 0.60)
@@ -919,7 +1040,7 @@ class SmartParametricBot:
         if profile["avg_three_bet"] > 0.16 or profile["avg_pfr"] > 0.24:
             strength -= 0.04
 
-        if _is_isolation_spot(stats_context, stats_context.get("call_amount", 0)):
+        if _is_isolation_spot(stats_context, _safe_int(stats_context.get("call_amount", 0), 0)):
             strength += self.config.isolate_bonus
 
         if _is_open_spot(stats_context) and _is_late_position(position):
@@ -974,11 +1095,11 @@ class SmartParametricBot:
         players_in_hand = _safe_int(stats_context.get("players_in_hand", len(opponents) + 1), len(opponents) + 1)
         is_cbet_opportunity = bool(stats_context.get("is_cbet_opportunity", False))
         is_facing_cbet = bool(stats_context.get("is_facing_cbet", False))
-        street = stats_context.get("street", "")
+        street = _norm_text(stats_context.get("street", ""))
         hero_has_initiative = bool(stats_context.get("hero_has_initiative", False))
         pot_was_limped_preflop = bool(stats_context.get("pot_was_limped_preflop", False))
-        last_action_kind = stats_context.get("last_action_kind", "")
-        last_action_street = stats_context.get("last_action_street", "")
+        last_action_kind = _norm_text(stats_context.get("last_action_kind", ""))
+        last_action_street = _norm_text(stats_context.get("last_action_street", ""))
         last_actor_stats = stats_context.get("last_actor_stats", None)
 
         if is_cbet_opportunity and len(board_cards) == 3:
@@ -1025,6 +1146,9 @@ class SmartParametricBot:
 
         if info["combo_draw"]:
             strength += 0.05
+
+        if info["flush_draw_with_hole"] or info["straight_draw_with_hole"]:
+            strength += 0.02
 
         if info["nut_flush_draw"]:
             strength += 0.03
@@ -1112,11 +1236,11 @@ class SmartParametricBot:
         opponents = stats_context.get("opponents", [])
         profile = _effective_opponent_profile(opponents)
         players_in_hand = _safe_int(stats_context.get("players_in_hand", len(opponents) + 1), len(opponents) + 1)
-        street = stats_context.get("street", "")
+        street = _norm_text(stats_context.get("street", ""))
         hero_has_initiative = bool(stats_context.get("hero_has_initiative", False))
         pot_was_limped_preflop = bool(stats_context.get("pot_was_limped_preflop", False))
-        last_action_kind = stats_context.get("last_action_kind", "")
-        last_action_street = stats_context.get("last_action_street", "")
+        last_action_kind = _norm_text(stats_context.get("last_action_kind", ""))
+        last_action_street = _norm_text(stats_context.get("last_action_street", ""))
         last_actor_stats = stats_context.get("last_actor_stats", None)
 
         if profile["avg_fold_to_cbet"] > 0.48:
@@ -1147,9 +1271,59 @@ class SmartParametricBot:
         if street == "flop":
             raise_threshold -= 0.02
         elif street == "river":
-            raise_threshold += 0.03
+            raise_threshold += 0.08
+            call_threshold += 0.10
 
         return _clamp(raise_threshold, 0.48, 0.90), _clamp(call_threshold, 0.28, 0.84)
+
+    def _should_check_back_river(
+        self,
+        info: Dict[str, Any],
+        stats_context: Optional[Dict[str, Any]],
+        strength: float,
+        call_amount: int,
+    ) -> bool:
+        if call_amount > 0 or not stats_context or _norm_text(stats_context.get("street", "")) != "river":
+            return False
+
+        position = _norm_pos(stats_context.get("position", ""))
+        players_in_hand = _safe_int(stats_context.get("players_in_hand", 2), 2)
+        hero_has_initiative = bool(stats_context.get("hero_has_initiative", False))
+        board_texture = info["board_texture"]
+
+        monster = any([
+            info["full_house_with_hole"],
+            info["quads_with_hole"],
+            info["flush_with_hole"],
+            info["set_made"],
+        ])
+        if monster:
+            return False
+
+        if info["trips_with_hole"]:
+            if players_in_hand > 2:
+                return True
+            if position in {"SB", "BB"} and board_texture in {"wet", "very_wet", "monotone", "paired", "paired_wet"}:
+                return True
+            if not hero_has_initiative:
+                return True
+
+        if info["straight_with_hole"] and board_texture in {"wet", "very_wet", "monotone", "paired_wet", "paired"}:
+            return True
+
+        if players_in_hand > 2 and not hero_has_initiative and strength < 0.92:
+            return True
+
+        if position in {"SB", "BB"} and not hero_has_initiative and strength < 0.90:
+            return True
+
+        if info["weak_pair"] or info["second_pair"]:
+            return True
+
+        if info["top_pair"] and info["kicker_strength"] < 0.70:
+            return True
+
+        return strength < 0.78
 
     def act(self, state, player_index: int, stats_context: Optional[Dict[str, Any]] = None) -> BotAction:
         hole_cards = state.hole_cards[player_index]
@@ -1168,9 +1342,9 @@ class SmartParametricBot:
         pot_odds_req = _pot_odds_required(call_amount, pot)
         is_preflop = len(board_cards) == 0
 
-        position = stats_context.get("position", "") if stats_context else ""
-        players_in_hand = _safe_int(stats_context.get("players_in_hand", 2), 2) if stats_context else 2
-        raise_count = _safe_int(stats_context.get("raise_count_before_action", 0), 0) if stats_context else 0
+        position = (stats_context or {}).get("position", "")
+        players_in_hand = _safe_int((stats_context or {}).get("players_in_hand", 2), 2)
+        raise_count = _safe_int((stats_context or {}).get("raise_count_before_action", 0), 0)
 
         # =========================
         # PREFLOP
@@ -1198,12 +1372,16 @@ class SmartParametricBot:
                         return action
 
                 if raise_count >= 1:
-                    if strength >= 0.74:
+                    if strength >= 0.86:
                         amount = self._raise_amount(state, stack, max(strength, 0.82), "preflop", stats_context)
                         if amount is not None:
                             action = BotAction("raise", amount)
                             self._record_stats_decision(action, stats_context)
                             return action
+                    if strength >= max(call_threshold, 0.64) and call_ratio <= 0.12:
+                        action = BotAction("call", call_amount)
+                        self._record_stats_decision(action, stats_context)
+                        return action
                     action = BotAction("fold")
                     self._record_stats_decision(action, stats_context)
                     return action
@@ -1283,6 +1461,11 @@ class SmartParametricBot:
         )
 
         raise_threshold, call_threshold = self._postflop_thresholds(stats_context)
+
+        if self._should_check_back_river(info, stats_context, strength, call_amount):
+            action = BotAction("check") if call_amount <= 0 else BotAction("call", call_amount)
+            self._record_stats_decision(action, stats_context)
+            return action
 
         # raise value / semibluff
         if strength >= raise_threshold:
@@ -1467,5 +1650,3 @@ class BotNegreanu(SmartParametricBot):
         if config is None:
             config = make_profile(profile_name or "blind_stealer")
         super().__init__(config)
-
-

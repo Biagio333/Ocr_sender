@@ -41,6 +41,7 @@ import java.io.OutputStreamWriter
 import java.io.PrintWriter
 import java.net.Socket
 import java.util.concurrent.Executors
+import kotlin.random.Random
 
 class MediaProjectionService : Service() {
 
@@ -408,7 +409,7 @@ class MediaProjectionService : Service() {
                                 processingElapsedMs
                             )
                         }
-                        sendCombinedJson(ocrItems, pokerCards, processingElapsedMs)
+                        sendCombinedJson(ocrItems, pokerCards, ocrRegions, processingElapsedMs)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error: ${e.message}")
@@ -462,7 +463,15 @@ class MediaProjectionService : Service() {
     }
 
     private fun collectTableOcrRegions(shapes: JSONArray, scaleX: Float, scaleY: Float): List<OcrRegion> {
-        val labels = listOf("pot", "Pot")
+        val labels = listOf(
+            "pot",
+            "Pot",
+            "pulsanti0",
+            "select_amount_button",
+            "select_amount_value",
+            "select_amount_plus",
+            "select_amount_minus",
+        )
         return labels.mapNotNull { label ->
             findRectByLabel(shapes, label, scaleX, scaleY)?.let { rect ->
                 OcrRegion(label, rect)
@@ -750,14 +759,19 @@ class MediaProjectionService : Service() {
     }
 
 
-    private fun sendCombinedJson(ocrItems: List<OcrItem>, pokerCards: List<PokerCard>, processingElapsedMs: Long) {
+    private fun sendCombinedJson(
+        ocrItems: List<OcrItem>,
+        pokerCards: List<PokerCard>,
+        ocrRegions: List<OcrRegion>,
+        processingElapsedMs: Long
+    ) {
         try {
             val root = JSONObject()
             root.put("timestamp", System.currentTimeMillis())
             root.put("processing_elapsed_ms", processingElapsedMs)
 
             root.put("players", buildPlayersJson(ocrItems, pokerCards))
-            root.put("table", buildTableJson(ocrItems, pokerCards))
+            root.put("table", buildTableJson(ocrItems, pokerCards, ocrRegions))
             
             val jsonStr = root.toString()
             Log.d(TAG, "Invio JSON: $jsonStr")
@@ -807,29 +821,325 @@ class MediaProjectionService : Service() {
         }
     }
 
+    private fun rectToJson(rect: Rect): JSONObject {
+        return JSONObject().apply {
+            put("left", rect.left)
+            put("top", rect.top)
+            put("right", rect.right)
+            put("bottom", rect.bottom)
+        }
+    }
+
     private fun pokerCardToJson(card: PokerCard): JSONObject {
         return JSONObject().apply {
             put("name", card.displayName)
             put("type", card.type)
-            put("rect", JSONObject().apply {
-                put("left", card.rect.left)
-                put("top", card.rect.top)
-                put("right", card.rect.right)
-                put("bottom", card.rect.bottom)
-            })
+            put("rect", rectToJson(card.rect))
         }
     }
 
     private fun ocrItemToJson(item: OcrItem): JSONObject {
         return JSONObject().apply {
             put("name", item.text)
-            put("rect", JSONObject().apply {
-                put("left", item.rect.left)
-                put("top", item.rect.top)
-                put("right", item.rect.right)
-                put("bottom", item.rect.bottom)
-            })
+            put("rect", rectToJson(item.rect))
         }
+    }
+
+    private data class MeasuredOcrItem(
+        val text: String,
+        val rect: Rect,
+        val x: Int,
+        val y: Int,
+        val w: Int,
+        val h: Int,
+        val cx: Float,
+    )
+
+    private fun measureOcrItem(item: OcrItem): MeasuredOcrItem {
+        val rect = item.rect
+        return MeasuredOcrItem(
+            text = item.text,
+            rect = rect,
+            x = rect.left,
+            y = rect.top,
+            w = rect.width(),
+            h = rect.height(),
+            cx = rect.exactCenterX(),
+        )
+    }
+
+    private fun clusterButtonItems(roiItems: List<OcrItem>): List<List<MeasuredOcrItem>> {
+        val measuredItems = roiItems.map { measureOcrItem(it) }.sortedBy { it.cx }
+        val clusters = mutableListOf<MutableList<MeasuredOcrItem>>()
+        val clusterCenters = mutableListOf<Float>()
+        val clusterWidths = mutableListOf<Float>()
+
+        for (item in measuredItems) {
+            var nearestIndex = -1
+            var nearestDistance: Float? = null
+
+            clusters.forEachIndexed { index, cluster ->
+                val distance = kotlin.math.abs(item.cx - clusterCenters[index])
+                val tolerance = maxOf(45f, (clusterWidths[index] + item.w) / 1.5f)
+                if (distance <= tolerance && (nearestDistance == null || distance < nearestDistance!!)) {
+                    nearestIndex = index
+                    nearestDistance = distance
+                }
+            }
+
+            if (nearestIndex < 0) {
+                clusters += mutableListOf(item)
+                clusterCenters += item.cx
+                clusterWidths += item.w.toFloat()
+                continue
+            }
+
+            val cluster = clusters[nearestIndex]
+            cluster += item
+            clusterCenters[nearestIndex] = cluster.map { it.cx }.average().toFloat()
+            clusterWidths[nearestIndex] = cluster.map { it.w.toFloat() }.average().toFloat()
+        }
+
+        return clusters
+    }
+
+    private fun labelForAmountControl(roiLabel: String): String {
+        val normalized = roiLabel.lowercase()
+        return when {
+            normalized.contains("minus") -> "-"
+            normalized.contains("plus") -> "+"
+            normalized.contains("button") -> "raise"
+            else -> roiLabel
+        }
+    }
+
+    private fun buttonJson(
+        label: String,
+        roiLabel: String,
+        buttonRect: Rect,
+        ocrRect: Rect? = null
+    ): JSONObject {
+        val clickRect = if (ocrRect != null) {
+            val padX = maxOf(1, (ocrRect.width() * 0.10 / 2.0).toInt())
+            val padY = maxOf(1, (ocrRect.height() * 0.10 / 2.0).toInt())
+            Rect(
+                maxOf(buttonRect.left, ocrRect.left - padX),
+                maxOf(buttonRect.top, ocrRect.top - padY),
+                minOf(buttonRect.right, ocrRect.right + padX),
+                minOf(buttonRect.bottom, ocrRect.bottom + padY)
+            )
+        } else {
+            buttonRect
+        }
+        val safeClickRect = if (clickRect.width() > 0 && clickRect.height() > 0) clickRect else buttonRect
+        val clickX = Random.nextInt(safeClickRect.left, safeClickRect.right.coerceAtLeast(safeClickRect.left + 1))
+        val clickY = Random.nextInt(safeClickRect.top, safeClickRect.bottom.coerceAtLeast(safeClickRect.top + 1))
+        return JSONObject().apply {
+            put("label", label)
+            put("roi_label", roiLabel)
+            put("button_rect", rectToJson(buttonRect))
+            put("click_rect", rectToJson(safeClickRect))
+            put("click_point", JSONObject().apply {
+                put("x", clickX)
+                put("y", clickY)
+            })
+            if (ocrRect != null) {
+                put("ocr_rect", rectToJson(ocrRect))
+                put("ocr_rect_area", ocrRect.width() * ocrRect.height())
+            } else {
+                put("ocr_rect", JSONObject.NULL)
+                put("ocr_rect_area", 0)
+            }
+        }
+    }
+
+    private fun parseActionButtonCluster(items: List<MeasuredOcrItem>, roiLabel: String): JSONObject? {
+        val ordered = items.sortedWith(compareBy<MeasuredOcrItem> { it.y }.thenBy { it.x })
+        val fullText = ordered.joinToString(" ") { it.text }.trim()
+        if (fullText.isBlank()) {
+            return null
+        }
+
+        val minX = ordered.minOf { it.x }
+        val minY = ordered.minOf { it.y }
+        val maxX = ordered.maxOf { it.x + it.w }
+        val maxY = ordered.maxOf { it.y + it.h }
+        val ocrRect = Rect(minX, minY, maxX, maxY)
+        val expandRatio = 0.10f
+        val padX = maxOf(1, ((ocrRect.width() * expandRatio) / 2f).toInt())
+        val padY = maxOf(1, ((ocrRect.height() * expandRatio) / 2f).toInt())
+        val buttonRect = Rect(
+            maxOf(0, ocrRect.left - padX),
+            maxOf(0, ocrRect.top - padY),
+            ocrRect.right + padX,
+            ocrRect.bottom + padY
+        )
+        return buttonJson(
+            label = fullText,
+            roiLabel = roiLabel,
+            buttonRect = buttonRect,
+            ocrRect = ocrRect
+        )
+    }
+
+    private fun buildActionButtonsJson(ocrItems: List<OcrItem>): JSONArray {
+        val buttons = JSONArray()
+        val groups = ocrItems
+            .filter { (it.sourceLabel ?: "").startsWith("pulsanti", ignoreCase = true) }
+            .groupBy { it.sourceLabel ?: "pulsanti" }
+
+        for ((roiLabel, items) in groups.toSortedMap()) {
+            for (cluster in clusterButtonItems(items)) {
+                val parsed = parseActionButtonCluster(cluster, roiLabel)
+                if (parsed != null) {
+                    buttons.put(parsed)
+                }
+            }
+        }
+        return buttons
+    }
+
+    private fun buildAmountButtonsJson(ocrItems: List<OcrItem>, ocrRegions: List<OcrRegion>): JSONArray {
+        val buttons = JSONArray()
+        val regions = ocrRegions
+            .filter {
+                val label = it.label.lowercase()
+                label.startsWith("select_amount") && !label.endsWith("value")
+            }
+            .sortedBy { it.label }
+
+        for (region in regions) {
+            val items = ocrItems.filter { it.sourceLabel == region.label }
+            if (region.label.equals("select_amount_button", ignoreCase = true)) {
+                val clusters = clusterButtonItems(items)
+                var addedCluster = false
+                for (cluster in clusters) {
+                    val parsed = parseActionButtonCluster(cluster, region.label)
+                    if (parsed != null) {
+                        buttons.put(parsed)
+                        addedCluster = true
+                    }
+                }
+                if (addedCluster) {
+                    continue
+                }
+            }
+
+            val ordered = items.sortedWith(compareBy<OcrItem> { it.rect.top }.thenBy { it.rect.left })
+            val fullText = ordered.joinToString(" ") { it.text }.trim()
+            val ocrRect = if (ordered.isNotEmpty()) {
+                Rect(
+                    ordered.minOf { it.rect.left },
+                    ordered.minOf { it.rect.top },
+                    ordered.maxOf { it.rect.right },
+                    ordered.maxOf { it.rect.bottom }
+                )
+            } else {
+                null
+            }
+            buttons.put(
+                buttonJson(
+                    label = if (fullText.isNotBlank()) fullText else labelForAmountControl(region.label),
+                    roiLabel = region.label,
+                    buttonRect = region.rect,
+                    ocrRect = ocrRect
+                )
+            )
+        }
+
+        return buttons
+    }
+
+    private fun readAmountValueText(ocrItems: List<OcrItem>): String {
+        return ocrItems
+            .filter { (it.sourceLabel ?: "").equals("select_amount_value", ignoreCase = true) }
+            .sortedWith(compareBy<OcrItem> { it.rect.left }.thenBy { it.rect.top })
+            .joinToString(" ") { it.text }
+            .trim()
+    }
+
+    private fun isLikelyPreActionButtons(
+        availableActions: JSONArray,
+        amountButtons: JSONArray,
+        amountValueText: String
+    ): Boolean {
+        if (availableActions.length() == 0 || availableActions.length() > 2) return false
+
+        val labels = mutableListOf<String>()
+        var maxHeight = 0
+        var maxWidth = 0
+        for (i in 0 until availableActions.length()) {
+            val button = availableActions.optJSONObject(i) ?: continue
+            val label = button.optString("label").lowercase().replace(Regex("[^a-z0-9]"), "")
+            labels.add(label)
+            val rect = button.optJSONObject("button_rect")
+            val left = rect?.optInt("left") ?: 0
+            val right = rect?.optInt("right") ?: left
+            val top = rect?.optInt("top") ?: 0
+            val bottom = rect?.optInt("bottom") ?: top
+            maxHeight = maxOf(maxHeight, bottom - top)
+            maxWidth = maxOf(maxWidth, right - left)
+        }
+
+        val shortcutCount = (0 until amountButtons.length()).count { index ->
+            val button = amountButtons.optJSONObject(index) ?: return@count false
+            val roiLabel = button.optString("roi_label").lowercase()
+            if (roiLabel != "select_amount_button") return@count false
+            val label = button.optString("label").trim().lowercase()
+            val ocrRectArea = button.optInt("ocr_rect_area", 0)
+            label.isNotBlank() && label != "raise" || ocrRectArea > 0
+        }
+
+        val labelsLookLikePreactions = labels.any { it.contains("checkfold") } || (
+            labels.size == 2 &&
+                labels.any { it.contains("fold") } &&
+                labels.any { it.contains("chiama") || it.contains("call") || it == "check" }
+            )
+        val labelsLookLikeMetaControls = labels.any {
+            it.startsWith("tornaagiocare") || it.startsWith("rientra") || it.startsWith("sitout")
+        }
+        val hasRealRaisePanel = amountValueText.isNotBlank() || shortcutCount >= 2
+        if (labelsLookLikeMetaControls && !hasRealRaisePanel) return true
+        if (
+            !hasRealRaisePanel &&
+            labels.isNotEmpty() &&
+            labels.size <= 2 &&
+            labels.all {
+                it.contains("fold") ||
+                    it.contains("check") ||
+                    it.contains("call") ||
+                    it.contains("chiama") ||
+                    it.contains("passa")
+            }
+        ) {
+            return true
+        }
+        return maxHeight <= 24 && maxWidth <= 130 && labelsLookLikePreactions && !hasRealRaisePanel
+    }
+
+    private fun hasRealRaisePanel(
+        amountButtons: JSONArray,
+        amountValueText: String
+    ): Boolean {
+        if (amountValueText.isNotBlank()) return true
+
+        var shortcutCount = 0
+        for (index in 0 until amountButtons.length()) {
+            val button = amountButtons.optJSONObject(index) ?: continue
+            when (button.optString("roi_label").lowercase()) {
+                "select_amount_button" -> {
+                    shortcutCount += 1
+                    val label = button.optString("label").trim().lowercase()
+                    if (label.isNotBlank() && label != "raise") {
+                        return true
+                    }
+                }
+                "select_amount_plus", "select_amount_minus" -> {
+                    shortcutCount += 1
+                }
+            }
+        }
+        return shortcutCount >= 3
     }
 
     private fun buildPlayersJson(ocrItems: List<OcrItem>, pokerCards: List<PokerCard>): JSONArray {
@@ -868,10 +1178,23 @@ class MediaProjectionService : Service() {
         }
     }
 
-    private fun buildTableJson(ocrItems: List<OcrItem>, pokerCards: List<PokerCard>): JSONObject {
+    private fun buildTableJson(
+        ocrItems: List<OcrItem>,
+        pokerCards: List<PokerCard>,
+        ocrRegions: List<OcrRegion>
+    ): JSONObject {
         val tableOcrItems = ocrItems.filter { classifyOcrLabel(it.sourceLabel) == "pot" }
         val boardCards = pokerCards.filter { it.id in 0..4 }
         val heroCards = pokerCards.filter { it.id in 10..11 }
+        val rawAvailableActions = buildActionButtonsJson(ocrItems)
+        val amountButtons = buildAmountButtonsJson(ocrItems, ocrRegions)
+        val amountValueText = readAmountValueText(ocrItems)
+        val availableActions = if (isLikelyPreActionButtons(rawAvailableActions, amountButtons, amountValueText)) {
+            JSONArray()
+        } else {
+            rawAvailableActions
+        }
+        val heroToAct = availableActions.length() > 0 || hasRealRaisePanel(amountButtons, amountValueText)
 
         return JSONObject().apply {
             put("pot", tableOcrItems.sortForReading().joinToString(" ") { it.text }.trim())
@@ -881,6 +1204,10 @@ class MediaProjectionService : Service() {
             put("hero_cards", JSONArray().apply {
                 heroCards.forEach { put(pokerCardToJson(it)) }
             })
+            put("available_actions", availableActions)
+            put("amount_buttons", amountButtons)
+            put("amount_value_text", amountValueText)
+            put("hero_to_act", heroToAct)
         }
     }
 

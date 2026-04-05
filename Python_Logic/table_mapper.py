@@ -34,6 +34,16 @@ class TableStateMapper:
 
         self.table.board_cards = list(table_data.get("board_cards", []) or [])
         self.table.hero_cards = list(table_data.get("hero_cards", []) or [])
+        self.table.available_actions = list(table_data.get("available_actions", []) or [])
+        self.table.amount_buttons = list(table_data.get("amount_buttons", []) or [])
+        self.table.amount_value_text = table_data.get("amount_value_text", "") or ""
+        self.table.hero_to_act = bool(table_data.get("hero_to_act", False))
+        self.table.buttons_visible = bool(
+            self.table.hero_to_act
+            or self.table.available_actions
+            or self.table.amount_buttons
+            or self.table.amount_value_text
+        )
         self.table.street = infer_street(self.table.board_cards)
         self.table.raw = payload
 
@@ -70,9 +80,7 @@ class TableStateMapper:
             self.table.street_pot_amount[-1]=0.0
             for player in self.table.players:
                 #aggiungo nellultimo
-                print (player.bet_amount)
                 self.table.street_pot_amount[-1] += player.bet_amount
-            print("---")
         except IndexError:
             pass
         #calcolo il pot amount come somma dei bet dei player 

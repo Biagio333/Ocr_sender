@@ -75,6 +75,11 @@ class TableStateMapper:
             if len(self.table.street_pot_amount) == 0:
                 self.table.street_pot_amount.append(0.0)  #inizializzo pot street preflop se non presente
 
+        # Se il capture/replay parte a mano gia iniziata, inizializza comunque
+        # un hand id sintetico per permettere al bridge hero di lavorare.
+        if self.table.hands_number <= 0 and len(self.table.hero_cards) == 2:
+            self.table.hands_number = 1
+
 
         try:
             self.table.street_pot_amount[-1]=0.0

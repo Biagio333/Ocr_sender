@@ -18,6 +18,7 @@ from config import (
     ADB_TAP_DELAY_SEC,
     DATA_SOURCE,
     ENABLE_ADB_AUTOCLICK,
+    ENABLE_BUTTON_DEBUG_LOGS,
     ENABLE_JSON_VIEWER,
     ENABLE_HERO_BOT,
     HERO_BOT_KIND,
@@ -41,6 +42,7 @@ from payload_utils import payload_summary, pretty_payload
 from table_mapper import TableStateMapper
 
 HERO_BLUE = "\033[94m"
+RED = "\033[91m"
 ACCENT = "\033[96m"
 RESET = "\033[0m"
 RANK_ORDER = "23456789TJQKA"
@@ -298,6 +300,63 @@ def _extract_first_amount_units(text: str, scale: int) -> int | None:
         return None
 
 
+def _normalized_button_label(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(text or "").strip().lower())
+
+
+def _is_meta_control_label(text: str) -> bool:
+    label = _normalized_button_label(text)
+    if not label:
+        return False
+    return (
+        label.startswith("tornaagiocare")
+        or label.startswith("rientra")
+        or label.startswith("sitout")
+        or "sitoutalbuiogrande" in label
+        or "sitoutlamano" in label
+    )
+
+
+def _looks_like_preaction_controls(buttons: list[dict] | None) -> bool:
+    raw_buttons = list(buttons or [])
+    if not raw_buttons or len(raw_buttons) > 2:
+        return False
+
+    raw_texts = [str(button.get("label", "")).strip() for button in raw_buttons]
+    if any(re.search(r"\d", text) for text in raw_texts):
+        return False
+
+    labels = [_normalized_button_label(text) for text in raw_texts]
+    labels = [label for label in labels if label]
+    if not labels:
+        return False
+
+    if any("checkfold" in label for label in labels):
+        return True
+
+    if (
+        len(labels) == 2
+        and any("fold" in label for label in labels)
+        and any("chiama" in label or "call" in label or label == "check" for label in labels)
+    ):
+        return True
+
+    if (
+        len(labels) == 2
+        and any("aspetta" in label and "grande" in label for label in labels)
+        and any("buio" in label for label in labels)
+    ):
+        return True
+
+    return False
+
+
+def _handle_no_red_action_area(table_state, ocr_items: list[dict] | None) -> None:
+    _ = table_state
+    _ = ocr_items or []
+    return
+
+
 class AdbAutoClicker:
     def __init__(
         self,
@@ -320,6 +379,9 @@ class AdbAutoClicker:
         self._last_execution_key: tuple | None = None
         self._last_attempt_at: float = 0.0
         self._attempt_count: int = 0
+        self._last_execution_consumed: bool = False
+        self._last_meta_execution_key: tuple | None = None
+        self._last_meta_attempt_at: float = 0.0
 
     def _log(self, message: str) -> None:
         print(f"ADB autoclick | {message}")
@@ -343,6 +405,49 @@ class AdbAutoClicker:
         jitter = random.uniform(0.0, self.tap_random_sec) if self.tap_random_sec > 0 else 0.0
         time.sleep(base_delay + jitter)
 
+    def maybe_execute_meta_button(self, table_state) -> bool:
+        buttons = list(getattr(table_state, "available_actions", []) or [])
+        meta_candidates = [
+            button for button in buttons
+            if _is_meta_control_label(button.get("label", ""))
+        ]
+        meta_button = None
+        if meta_candidates:
+            meta_button = max(
+                meta_candidates,
+                key=lambda button: (
+                    len(str(button.get("label", ""))),
+                    int(((button.get("button_rect") or {}).get("right") or 0)) - int(((button.get("button_rect") or {}).get("left") or 0)),
+                ),
+            )
+
+        if meta_button is None:
+            self._last_meta_execution_key = None
+            self._last_meta_attempt_at = 0.0
+            return False
+
+        target = _click_point(meta_button)
+        if target is None:
+            self._log("skip: meta button found but no click target")
+            return False
+
+        execution_key = (
+            getattr(table_state, "hands_number", None),
+            getattr(table_state, "street", None),
+            _normalized_button_label(meta_button.get("label", "")),
+            _tap_point_signature(meta_button),
+        )
+        now = time.monotonic()
+        if execution_key == self._last_meta_execution_key and now - self._last_meta_attempt_at < self.retry_delay_sec:
+            self._log("skip: waiting retry delay for meta button")
+            return False
+
+        self._log(f"execute meta button label={meta_button.get('label', '')} target={target}")
+        self._tap(*target)
+        self._last_meta_execution_key = execution_key
+        self._last_meta_attempt_at = time.monotonic()
+        return True
+
     def maybe_execute(self, table_state, hero_decision) -> None:
         execution_key = (
             hero_decision.hand_id,
@@ -357,6 +462,10 @@ class AdbAutoClicker:
             self._last_execution_key = execution_key
             self._attempt_count = 0
             self._last_attempt_at = 0.0
+            self._last_execution_consumed = False
+        elif self._last_execution_consumed:
+            #self._log("skip: decision already executed")
+            return
         elif self._attempt_count >= self.max_retries:
             self._log("skip: max retries reached")
             return
@@ -378,6 +487,7 @@ class AdbAutoClicker:
             self._tap(*action_point)
             self._attempt_count += 1
             self._last_attempt_at = time.monotonic()
+            self._last_execution_consumed = True
             return
 
         if hero_decision.action_kind != "raise":
@@ -439,6 +549,7 @@ class AdbAutoClicker:
         self._tap(*final_point)
         self._attempt_count += 1
         self._last_attempt_at = time.monotonic()
+        self._last_execution_consumed = True
 
 
 def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
@@ -546,6 +657,7 @@ def main():
     table_mapper = TableStateMapper()
     hero_bot = None
     adb_auto_clicker = None
+    last_hero_decision = None
     if ENABLE_HERO_BOT:
         hero_bot = HeroBotBridge(bot_kind=HERO_BOT_KIND, profile_name=HERO_BOT_PROFILE)
     if ENABLE_ADB_AUTOCLICK and DATA_SOURCE == "socket":
@@ -604,15 +716,65 @@ def main():
                 saved_path = packet_store.save_payload(payload)
                 #print(f"Pacchetto salvato in: {saved_path}")
 
+            
+            if ENABLE_BUTTON_DEBUG_LOGS:
+                table_debug = ((getattr(table_state, "raw", {}) or {}).get("table", {}) or {})
+                debug_pulsanti0_raw = str(table_debug.get("debug_pulsanti0_ocr_raw", "") or "").strip()
+                debug_pulsanti0_clusters = str(table_debug.get("debug_pulsanti0_ocr_clusters", "") or "").strip()
+                debug_pulsanti0_parsed = str(table_debug.get("debug_pulsanti0_parsed_buttons", "") or "").strip()
+                if debug_pulsanti0_raw or debug_pulsanti0_clusters or debug_pulsanti0_parsed:
+                    print(f"pulsanti0 OCR raw: {debug_pulsanti0_raw or '-'}")
+                    print(f"pulsanti0 OCR clusters: {debug_pulsanti0_clusters or '-'}")
+                    print(f"pulsanti0 parsed button: {debug_pulsanti0_parsed or '-'}")
+
+            current_available_actions = getattr(table_state, "available_actions", []) or []
+            has_red_action_area = bool((((getattr(table_state, "raw", {}) or {}).get("table", {}) or {}).get("has_red_action_area", False)))
+            red_action_area_avg_red = (((getattr(table_state, "raw", {}) or {}).get("table", {}) or {}).get("red_action_area_avg_red", 0.0))
+            if has_red_action_area:
+                print(
+                    f"{RED}pulsanti OCR con rosso: "
+                    f"avgRed={red_action_area_avg_red} "
+                    f"buttons={_button_labels(current_available_actions)}{RESET}"
+                )
+            ocr_items = list((getattr(table_state, "raw", {}) or {}).get("ocr_items", []) or [])
+            if not has_red_action_area:
+                _handle_no_red_action_area(table_state, ocr_items)
+            if _looks_like_preaction_controls(current_available_actions) and not has_red_action_area:
+                last_hero_decision = None
+                continue
+
+            if adb_auto_clicker is not None and has_red_action_area:
+                try:
+                    if adb_auto_clicker.maybe_execute_meta_button(table_state):
+                        last_hero_decision = None
+                        continue
+                except Exception as exc:
+                    print(f"ADB meta autoclick error: {exc}")
+
             if hero_bot is not None:
                 hero_decision = hero_bot.process_table(table_state)
                 if hero_decision is not None:
+                    last_hero_decision = hero_decision
                     _print_hero_bot_snapshot(table_state, hero_decision, hero_bot)
-                    if adb_auto_clicker is not None:
-                        try:
-                            adb_auto_clicker.maybe_execute(table_state, hero_decision)
-                        except Exception as exc:
-                            print(f"ADB autoclick error: {exc}")
+                elif last_hero_decision is not None:
+                    if (
+                        last_hero_decision.hand_id != table_state.hands_number
+                        or last_hero_decision.street != table_state.street
+                    ):
+                        last_hero_decision = None
+                    elif not (
+                        table_state.hero_to_act
+                        or getattr(table_state, "available_actions", [])
+                        or getattr(table_state, "amount_buttons", [])
+                        or getattr(table_state, "amount_value_text", "")
+                    ):
+                        last_hero_decision = None
+
+                if adb_auto_clicker is not None and has_red_action_area and last_hero_decision is not None:
+                    try:
+                        adb_auto_clicker.maybe_execute(table_state, last_hero_decision)
+                    except Exception as exc:
+                        print(f"ADB autoclick error: {exc}")
 
             if json_viewer_enabled:
                 img = draw_results(payload)

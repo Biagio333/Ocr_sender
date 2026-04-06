@@ -84,6 +84,13 @@ class MediaProjectionService : Service() {
         val sourceLabel: String? = null
     )
     data class OcrRegion(val label: String, val rect: Rect)
+    data class RedActionAreaStats(
+        val detected: Boolean,
+        val avgRed: Double,
+        val avgGreen: Double,
+        val avgBlue: Double,
+        val regionLabel: String,
+    )
 
     companion object {
         const val EXTRA_RESULT_CODE = "EXTRA_RESULT_CODE"
@@ -399,6 +406,7 @@ class MediaProjectionService : Service() {
                     val extracted = extractOcrItems(visionText, OCR_PRE_SCALE_FACTOR)
                     val ocrItems = assignLabelsToOcrItems(extracted.first, ocrRegions)
                     val processingElapsedMs = SystemClock.elapsedRealtime() - processingStartedAt
+                    val redActionAreaStats = measureRedActionArea(screen, ocrRegions)
 
                     handler.post {
                         if (showOverlay) {
@@ -409,7 +417,7 @@ class MediaProjectionService : Service() {
                                 processingElapsedMs
                             )
                         }
-                        sendCombinedJson(ocrItems, pokerCards, ocrRegions, processingElapsedMs)
+                        sendCombinedJson(ocrItems, pokerCards, ocrRegions, processingElapsedMs, redActionAreaStats)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error: ${e.message}")
@@ -763,15 +771,19 @@ class MediaProjectionService : Service() {
         ocrItems: List<OcrItem>,
         pokerCards: List<PokerCard>,
         ocrRegions: List<OcrRegion>,
-        processingElapsedMs: Long
+        processingElapsedMs: Long,
+        redActionAreaStats: RedActionAreaStats
     ) {
         try {
             val root = JSONObject()
             root.put("timestamp", System.currentTimeMillis())
             root.put("processing_elapsed_ms", processingElapsedMs)
 
+            root.put("ocr_items", JSONArray().apply {
+                ocrItems.forEach { put(ocrItemToJson(it)) }
+            })
             root.put("players", buildPlayersJson(ocrItems, pokerCards))
-            root.put("table", buildTableJson(ocrItems, pokerCards, ocrRegions))
+            root.put("table", buildTableJson(ocrItems, pokerCards, ocrRegions, redActionAreaStats))
             
             val jsonStr = root.toString()
             Log.d(TAG, "Invio JSON: $jsonStr")
@@ -841,6 +853,7 @@ class MediaProjectionService : Service() {
     private fun ocrItemToJson(item: OcrItem): JSONObject {
         return JSONObject().apply {
             put("name", item.text)
+            put("source_label", item.sourceLabel ?: JSONObject.NULL)
             put("rect", rectToJson(item.rect))
         }
     }
@@ -989,14 +1002,69 @@ class MediaProjectionService : Service() {
             .groupBy { it.sourceLabel ?: "pulsanti" }
 
         for ((roiLabel, items) in groups.toSortedMap()) {
-            for (cluster in clusterButtonItems(items)) {
+            if (roiLabel.equals("pulsanti0", ignoreCase = true)) {
+                val rawSummary = items.joinToString(" | ") { item ->
+                    "${item.text}@${item.rect.left},${item.rect.top},${item.rect.right},${item.rect.bottom}"
+                }
+                Log.d(TAG, "pulsanti0 OCR raw: count=${items.size} items=$rawSummary")
+            }
+
+            val clusters = clusterButtonItems(items)
+            if (roiLabel.equals("pulsanti0", ignoreCase = true)) {
+                val clusterSummary = clusters.joinToString(" || ") { cluster ->
+                    cluster.joinToString(" + ") { item ->
+                        "${item.text}@${item.x},${item.y},${item.w}x${item.h}"
+                    }
+                }
+                Log.d(TAG, "pulsanti0 OCR clusters: count=${clusters.size} clusters=$clusterSummary")
+            }
+
+            for (cluster in clusters) {
                 val parsed = parseActionButtonCluster(cluster, roiLabel)
                 if (parsed != null) {
+                    if (roiLabel.equals("pulsanti0", ignoreCase = true)) {
+                        Log.d(TAG, "pulsanti0 parsed button: ${parsed}")
+                    }
                     buttons.put(parsed)
                 }
             }
         }
         return buttons
+    }
+
+    private fun debugPulsanti0Raw(ocrItems: List<OcrItem>): String {
+        val items = ocrItems.filter { (it.sourceLabel ?: "").equals("pulsanti0", ignoreCase = true) }
+        if (items.isEmpty()) return ""
+        return items.joinToString(" | ") { item ->
+            "${item.text}@${item.rect.left},${item.rect.top},${item.rect.right},${item.rect.bottom}"
+        }
+    }
+
+    private fun debugPulsanti0Clusters(ocrItems: List<OcrItem>): String {
+        val items = ocrItems.filter { (it.sourceLabel ?: "").equals("pulsanti0", ignoreCase = true) }
+        if (items.isEmpty()) return ""
+        return clusterButtonItems(items).joinToString(" || ") { cluster ->
+            cluster.joinToString(" + ") { item ->
+                "${item.text}@${item.x},${item.y},${item.w}x${item.h}"
+            }
+        }
+    }
+
+    private fun debugPulsanti0Parsed(rawAvailableActions: JSONArray): String {
+        val entries = mutableListOf<String>()
+        for (index in 0 until rawAvailableActions.length()) {
+            val button = rawAvailableActions.optJSONObject(index) ?: continue
+            val roiLabel = button.optString("roi_label")
+            if (!roiLabel.equals("pulsanti0", ignoreCase = true)) continue
+            val label = button.optString("label")
+            val rect = button.optJSONObject("button_rect")
+            val left = rect?.optInt("left") ?: 0
+            val top = rect?.optInt("top") ?: 0
+            val right = rect?.optInt("right") ?: 0
+            val bottom = rect?.optInt("bottom") ?: 0
+            entries += "$label@$left,$top,$right,$bottom"
+        }
+        return entries.joinToString(" | ")
     }
 
     private fun buildAmountButtonsJson(ocrItems: List<OcrItem>, ocrRegions: List<OcrRegion>): JSONArray {
@@ -1058,12 +1126,76 @@ class MediaProjectionService : Service() {
             .trim()
     }
 
+    private fun measureRedActionArea(
+        screen: Bitmap,
+        ocrRegions: List<OcrRegion>
+    ): RedActionAreaStats {
+        val candidateRegions = ocrRegions.filter {
+            val label = it.label.lowercase()
+            label == "pulsanti0"
+        }
+        if (candidateRegions.isEmpty()) {
+            return RedActionAreaStats(false, 0.0, 0.0, 0.0, "")
+        }
+
+        var bestStats = RedActionAreaStats(false, 0.0, 0.0, 0.0, "")
+        var bestScore = Double.NEGATIVE_INFINITY
+
+        candidateRegions.forEach { region ->
+            val safeRect = clampRectToBitmap(region.rect, screen) ?: return@forEach
+            if (safeRect.width() < 40 || safeRect.height() < 20) return@forEach
+
+            val sampleStep = maxOf(1, minOf(safeRect.width(), safeRect.height()) / 24)
+            var sampledPixels = 0
+            var redSum = 0.0
+            var greenSum = 0.0
+            var blueSum = 0.0
+
+            var y = safeRect.top
+            while (y < safeRect.bottom) {
+                var x = safeRect.left
+                while (x < safeRect.right) {
+                    val pixel = screen.getPixel(x, y)
+                    redSum += Color.red(pixel).toDouble()
+                    greenSum += Color.green(pixel).toDouble()
+                    blueSum += Color.blue(pixel).toDouble()
+                    sampledPixels += 1
+                    x += sampleStep
+                }
+                y += sampleStep
+            }
+
+            if (sampledPixels == 0) return@forEach
+            val avgRed = redSum / sampledPixels.toDouble()
+            val avgGreen = greenSum / sampledPixels.toDouble()
+            val avgBlue = blueSum / sampledPixels.toDouble()
+            val redMinThreshold = 255.0 / 4.0
+            val detected = avgRed >= redMinThreshold
+
+            val score = avgRed - ((avgGreen + avgBlue) / 2.0)
+            if (score > bestScore) {
+                bestScore = score
+                bestStats = RedActionAreaStats(
+                    detected = detected,
+                    avgRed = avgRed,
+                    avgGreen = avgGreen,
+                    avgBlue = avgBlue,
+                    regionLabel = region.label,
+                )
+            }
+        }
+
+        return bestStats
+    }
+
     private fun isLikelyPreActionButtons(
         availableActions: JSONArray,
         amountButtons: JSONArray,
-        amountValueText: String
+        amountValueText: String,
+        redActionAreaDetected: Boolean
     ): Boolean {
         if (availableActions.length() == 0 || availableActions.length() > 2) return false
+        if (redActionAreaDetected) return false
 
         val labels = mutableListOf<String>()
         var maxHeight = 0
@@ -1181,7 +1313,8 @@ class MediaProjectionService : Service() {
     private fun buildTableJson(
         ocrItems: List<OcrItem>,
         pokerCards: List<PokerCard>,
-        ocrRegions: List<OcrRegion>
+        ocrRegions: List<OcrRegion>,
+        redActionAreaStats: RedActionAreaStats
     ): JSONObject {
         val tableOcrItems = ocrItems.filter { classifyOcrLabel(it.sourceLabel) == "pot" }
         val boardCards = pokerCards.filter { it.id in 0..4 }
@@ -1189,12 +1322,19 @@ class MediaProjectionService : Service() {
         val rawAvailableActions = buildActionButtonsJson(ocrItems)
         val amountButtons = buildAmountButtonsJson(ocrItems, ocrRegions)
         val amountValueText = readAmountValueText(ocrItems)
-        val availableActions = if (isLikelyPreActionButtons(rawAvailableActions, amountButtons, amountValueText)) {
+        val availableActions = if (
+            isLikelyPreActionButtons(
+                rawAvailableActions,
+                amountButtons,
+                amountValueText,
+                redActionAreaStats.detected
+            )
+        ) {
             JSONArray()
         } else {
             rawAvailableActions
         }
-        val heroToAct = availableActions.length() > 0 || hasRealRaisePanel(amountButtons, amountValueText)
+        val heroToAct = availableActions.length() > 0 || hasRealRaisePanel(amountButtons, amountValueText) || redActionAreaStats.detected
 
         return JSONObject().apply {
             put("pot", tableOcrItems.sortForReading().joinToString(" ") { it.text }.trim())
@@ -1208,6 +1348,14 @@ class MediaProjectionService : Service() {
             put("amount_buttons", amountButtons)
             put("amount_value_text", amountValueText)
             put("hero_to_act", heroToAct)
+            put("has_red_action_area", redActionAreaStats.detected)
+            put("red_action_area_avg_red", redActionAreaStats.avgRed)
+            put("red_action_area_avg_green", redActionAreaStats.avgGreen)
+            put("red_action_area_avg_blue", redActionAreaStats.avgBlue)
+            put("red_action_area_region_label", redActionAreaStats.regionLabel)
+            put("debug_pulsanti0_ocr_raw", debugPulsanti0Raw(ocrItems))
+            put("debug_pulsanti0_ocr_clusters", debugPulsanti0Clusters(ocrItems))
+            put("debug_pulsanti0_parsed_buttons", debugPulsanti0Parsed(rawAvailableActions))
         }
     }
 

@@ -52,6 +52,13 @@ def _normalize_control_label(label: str) -> str:
     return "".join(ch for ch in (label or "").strip().lower() if ch.isalnum())
 
 
+def _sanitize_action_button_label(label: str) -> str:
+    text = str(label or "").strip()
+    text = re.sub(r"\b\d{1,2}:\d{2}\b", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def _extract_first_amount(text: str) -> float | None:
     normalized_text = str(text or "")
     normalized_text = re.sub(r"(?i)e[o]", "e0", normalized_text)
@@ -315,6 +322,12 @@ class HeroBotBridge:
         action = self.bot.act(state, HERO_SEAT, stats_context=stats_context)
         action = self._coerce_action_to_visible_controls(action, state)
         selected_action_button = self._select_action_button(action.kind, state.checking_or_calling_amount)
+        if selected_action_button is None:
+            selected_action_button = self._force_visible_action_button(
+                table,
+                action.kind,
+                state.checking_or_calling_amount,
+            )
         selected_amount_button = None
         if action.kind == "raise" and action.amount is not None:
             selected_amount_button = self._select_amount_button(action.amount)
@@ -322,6 +335,11 @@ class HeroBotBridge:
         # If the current frame still lacks a real action target, keep waiting for
         # the next packets of the same turn instead of consuming the decision.
         if selected_action_button is None:
+            print(
+                "Hero bot skip: no matching visible action button "
+                f"wanted={action.kind} call_amount={state.checking_or_calling_amount} "
+                f"available={[button.get('label', '') for button in self._hero_available_actions]}"
+            )
             return None
 
         recommendation_key = (
@@ -473,7 +491,9 @@ class HeroBotBridge:
                 active.append(player.player_index)
             elif player.has_covered_card:
                 active.append(player.player_index)
-            elif (player.name or "").strip() and float(player.stack_amount or 0.0) > 0.0:
+            elif player.has_dealer_button:
+                active.append(player.player_index)
+            elif float(player.stack_amount or 0.0) > 0.0:
                 active.append(player.player_index)
         return active
 
@@ -653,7 +673,11 @@ class HeroBotBridge:
             return False
         if not self._positions_map:
             return False
-        controls_visible = bool(self._hero_available_actions) or self._has_real_raise_panel(table)
+        controls_visible = (
+            bool(self._hero_available_actions)
+            or self._has_real_raise_panel(table)
+            or self._has_red_action_area(table)
+        )
         if table.hero_to_act and controls_visible:
             return True
         if not self._hero_is_next_to_act(table):
@@ -1159,6 +1183,10 @@ class HeroBotBridge:
     def _format_amount(self, value: int | None) -> str:
         return _format_units(value, self._money_scale)
 
+    def _has_red_action_area(self, table: TableBase) -> bool:
+        raw_table = table.raw.get("table", table.raw) if isinstance(table.raw, dict) else {}
+        return bool(raw_table.get("has_red_action_area", False))
+
     def _controls_key(self, table: TableBase) -> tuple[Any, ...]:
         return (
             tuple(
@@ -1176,6 +1204,7 @@ class HeroBotBridge:
                 for button in table.amount_buttons
             ),
             table.amount_value_text or "",
+            self._has_red_action_area(table),
         )
 
     def _sync_hero_controls(self, table: TableBase) -> bool:
@@ -1192,13 +1221,16 @@ class HeroBotBridge:
         self._hero_available_actions = self._clean_available_actions(table)
         self._hero_amount_buttons = self._clean_amount_buttons(table)
         self._hero_buttons_visible = bool(table.buttons_visible or table.hero_to_act)
+        red_action_area_visible = self._has_red_action_area(table)
         if table.hero_to_act and self._hero_available_actions:
             self._pending_hero_turn = True
         elif table.hero_to_act and self._has_real_raise_panel(table):
             self._pending_hero_turn = True
+        elif table.hero_to_act and red_action_area_visible:
+            self._pending_hero_turn = True
         if (
             self._hero_buttons_visible
-            and (self._hero_available_actions or self._has_real_raise_panel(table))
+            and (self._hero_available_actions or self._has_real_raise_panel(table) or red_action_area_visible)
             and self._stable_controls_frames >= 2
             and not self._pending_hero_turn
         ):
@@ -1253,6 +1285,8 @@ class HeroBotBridge:
                 fallback = button
             elif wanted == "check" and mapped == "call":
                 fallback = button
+            elif wanted == "fold" and mapped == "check":
+                fallback = button
 
         if fallback or best:
             return fallback or best
@@ -1271,6 +1305,8 @@ class HeroBotBridge:
             mapped = self._map_button_to_action_kind(button, call_amount)
             if mapped == wanted:
                 return button
+            if wanted in {"call", "fold"} and mapped == "check":
+                fallback = button
 
         if wanted == "check" and call_amount <= 0 and len(raw_buttons) == 1:
             return raw_buttons[0]
@@ -1278,8 +1314,37 @@ class HeroBotBridge:
             return raw_buttons[0]
         if wanted == "call" and call_amount > 0 and len(raw_buttons) >= 2:
             return raw_buttons[1]
+        if fallback is not None:
+            return fallback
 
         return None
+
+    def _force_visible_action_button(self, table: TableBase, action_kind: str, call_amount: int = 0) -> dict[str, Any] | None:
+        if not self._has_red_action_area(table):
+            return None
+
+        visible_buttons = list(self._hero_available_actions) or [dict(button) for button in self._hero_raw_available_actions]
+        if not visible_buttons:
+            return None
+
+        for button in visible_buttons:
+            mapped = self._map_button_to_action_kind(button, call_amount)
+            if mapped == action_kind:
+                return button
+
+        if action_kind in {"call", "fold"}:
+            for button in visible_buttons:
+                mapped = self._map_button_to_action_kind(button, call_amount)
+                if mapped == "check":
+                    return button
+
+        if action_kind == "raise":
+            for button in visible_buttons:
+                mapped = self._map_button_to_action_kind(button, call_amount)
+                if mapped in {"call", "check", "fold"}:
+                    return button
+
+        return visible_buttons[0]
 
     def _coerce_action_to_visible_controls(self, action, state: LivePokerState):
         available_kinds = {
@@ -1298,14 +1363,14 @@ class HeroBotBridge:
                 return type(action)(kind="check", amount=None)
             if state.checking_or_calling_amount > 0 and "fold" in available_kinds:
                 return type(action)(kind="fold", amount=None)
-        if action.kind == "call" and "check" in available_kinds and state.checking_or_calling_amount <= 0:
+        if action.kind == "call" and "check" in available_kinds:
             return type(action)(kind="check", amount=None)
         if action.kind == "check" and "call" in available_kinds and state.checking_or_calling_amount > 0:
             return type(action)(kind="call", amount=None)
         if action.kind == "fold":
-            if state.checking_or_calling_amount <= 0 and "check" in available_kinds:
+            if "check" in available_kinds:
                 return type(action)(kind="check", amount=None)
-            if state.checking_or_calling_amount <= 0 and "call" in available_kinds:
+            if "call" in available_kinds:
                 return type(action)(kind="check", amount=None)
         return action
 
@@ -1395,10 +1460,12 @@ class HeroBotBridge:
             for label in raw_labels
         )
         has_real_raise_panel = bool(amount_value_text) or amount_shortcuts >= 2
-        if labels_look_like_meta_controls and not has_real_raise_panel:
+        has_red_action_area = self._has_red_action_area(table)
+        if labels_look_like_meta_controls and not has_real_raise_panel and not has_red_action_area:
             return []
         if (
             not has_real_raise_panel
+            and not has_red_action_area
             and len(raw_buttons) <= 2
             and raw_labels
             and all(
@@ -1411,15 +1478,17 @@ class HeroBotBridge:
             )
         ):
             return []
-        if only_two_small_buttons and labels_look_like_preactions and not has_real_raise_panel:
+        if only_two_small_buttons and labels_look_like_preactions and not has_real_raise_panel and not has_red_action_area:
             return []
 
         cleaned: list[dict[str, Any]] = []
         for index, button in enumerate(raw_buttons):
             if _button_center_y(button) < row_threshold:
                 continue
-            raw_label = str(button.get("label", "")).strip()
+            raw_label = _sanitize_action_button_label(str(button.get("label", "")).strip())
             normalized = _normalize_control_label(raw_label)
+            if not normalized:
+                continue
             cleaned_button = dict(button)
             cleaned_button["raw_label"] = raw_label
 

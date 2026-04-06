@@ -37,7 +37,7 @@ from data_source import (
     SocketPayloadReceiver,
     create_replay_buffer,
 )
-from data_store import HeroDecisionStore, PacketStore
+from data_store import HandHistoryStore, HeroDecisionStore, PacketStore
 from hero_bot_bridge import HeroBotBridge
 from payload_utils import payload_summary, pretty_payload
 from table_mapper import TableStateMapper
@@ -305,6 +305,46 @@ def _normalized_button_label(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(text or "").strip().lower())
 
 
+def _button_action_kind(button: dict | None, call_amount: int = 0) -> str:
+    label = str((button or {}).get("label", "")).strip().lower()
+    if not label:
+        return ""
+    if "fold" in label:
+        return "fold"
+    if "check" in label:
+        return "check"
+    if "call" in label or "chiama" in label:
+        return "call" if call_amount > 0 else "check"
+    if "raise" in label or "rilancia" in label or "bet" in label or "punta" in label:
+        return "raise"
+    return ""
+
+
+def _find_live_action_button(table_state, hero_decision) -> dict | None:
+    if hero_decision is None:
+        return None
+    wanted = str(getattr(hero_decision, "action_kind", "") or "").strip().lower()
+    if not wanted:
+        return None
+
+    call_amount = int(getattr(hero_decision, "call_amount", 0) or 0)
+    available_actions = list(getattr(table_state, "available_actions", []) or [])
+    if not available_actions:
+        return None
+
+    selected_signature = _tap_point_signature(getattr(hero_decision, "selected_action_button", None))
+    fallback = None
+    for button in available_actions:
+        mapped = _button_action_kind(button, call_amount)
+        if mapped == wanted:
+            if _tap_point_signature(button) == selected_signature:
+                return button
+            if fallback is None:
+                fallback = button
+
+    return fallback
+
+
 def _is_meta_control_label(text: str) -> bool:
     label = _normalized_button_label(text)
     if not label:
@@ -488,7 +528,6 @@ class AdbAutoClicker:
             self._tap(*action_point)
             self._attempt_count += 1
             self._last_attempt_at = time.monotonic()
-            self._last_execution_consumed = True
             return
 
         if hero_decision.action_kind != "raise":
@@ -550,7 +589,6 @@ class AdbAutoClicker:
         self._tap(*final_point)
         self._attempt_count += 1
         self._last_attempt_at = time.monotonic()
-        self._last_execution_consumed = True
 
 
 def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
@@ -672,6 +710,46 @@ def _save_hero_decision_snapshot(decision_store, payload, table_state, hero_deci
     decision_store.save_decision(row)
 
 
+def _save_hand_history_snapshot(hand_store, payload, table_state, hero_decision=None) -> None:
+    if hand_store is None:
+        return
+
+    hand_id = getattr(table_state, "hands_number", 0)
+    if hand_id <= 0:
+        return
+
+    winner_seat = None
+    winner_name = None
+    for player in getattr(table_state, "players", []) or []:
+        action = str(getattr(player, "inferred_action", "") or "").strip().lower()
+        if action.startswith("vin"):
+            winner_seat = player.player_index
+            winner_name = player.name or f"Seat {player.player_index}"
+            break
+
+    hero_player = table_state.get_player(0) if hasattr(table_state, "get_player") else None
+    row = {
+        "hand_id": hand_id,
+        "first_payload_timestamp": payload.get("timestamp"),
+        "last_payload_timestamp": payload.get("timestamp"),
+        "street": getattr(table_state, "street", ""),
+        "hero_position": getattr(hero_decision, "position", "") if hero_decision is not None else "",
+        "hero_cards": json.dumps(list(getattr(table_state, "hero_cards", []) or []), ensure_ascii=False),
+        "board_cards": json.dumps(list(getattr(table_state, "board_cards", []) or []), ensure_ascii=False),
+        "hero_stack": getattr(hero_decision, "hero_stack", None) if hero_decision is not None else getattr(hero_player, "stack_amount", None),
+        "hero_bet": getattr(hero_decision, "hero_bet", None) if hero_decision is not None else getattr(hero_player, "bet_amount", None),
+        "pot_amount": getattr(table_state, "pot_amount", None),
+        "hero_action_kind": getattr(hero_decision, "action_kind", None) if hero_decision is not None else None,
+        "hero_action_amount": getattr(hero_decision, "action_amount", None) if hero_decision is not None else None,
+        "source_action_player": getattr(hero_decision, "source_action_player", None) if hero_decision is not None else None,
+        "source_action_kind": getattr(hero_decision, "source_action_kind", None) if hero_decision is not None else None,
+        "winner_seat": winner_seat,
+        "winner_name": winner_name,
+        "payload": payload,
+    }
+    hand_store.upsert_hand(row)
+
+
 def main():
     cv2 = None
     draw_results = None
@@ -688,6 +766,7 @@ def main():
     payload_buffer, receiver = build_payload_buffer()
     packet_store = None
     hero_decision_store = None
+    hand_history_store = None
     table_mapper = TableStateMapper()
     hero_bot = None
     adb_auto_clicker = None
@@ -708,6 +787,7 @@ def main():
         packet_store = PacketStore(PACKET_SAVE_DIR)
     if ENABLE_HERO_BOT:
         hero_decision_store = HeroDecisionStore(PACKET_SAVE_DIR)
+        hand_history_store = HandHistoryStore(PACKET_SAVE_DIR)
 
     index = 0
     try:
@@ -752,6 +832,8 @@ def main():
                 saved_path = packet_store.save_payload(payload)
                 #print(f"Pacchetto salvato in: {saved_path}")
 
+            _save_hand_history_snapshot(hand_history_store, payload, table_state)
+
             
             if ENABLE_BUTTON_DEBUG_LOGS:
                 table_debug = ((getattr(table_state, "raw", {}) or {}).get("table", {}) or {})
@@ -792,6 +874,7 @@ def main():
                 if hero_decision is not None:
                     last_hero_decision = hero_decision
                     _save_hero_decision_snapshot(hero_decision_store, payload, table_state, hero_decision)
+                    _save_hand_history_snapshot(hand_history_store, payload, table_state, hero_decision)
                     _print_hero_bot_snapshot(table_state, hero_decision, hero_bot)
                 elif last_hero_decision is not None:
                     if (
@@ -808,6 +891,21 @@ def main():
                         last_hero_decision = None
 
                 if adb_auto_clicker is not None and has_red_action_area and last_hero_decision is not None:
+                    live_action_button = _find_live_action_button(table_state, last_hero_decision)
+                    if live_action_button is None:
+                        print(
+                            "ADB autoclick | skip stale decision: "
+                            f"wanted={last_hero_decision.action_kind} "
+                            f"buttons={_button_labels(current_available_actions)}"
+                        )
+                        hero_bot.invalidate_hero_decision(
+                            last_hero_decision.hand_id,
+                            last_hero_decision.street,
+                        )
+                        last_hero_decision = None
+                        continue
+
+                    last_hero_decision.selected_action_button = live_action_button
                     try:
                         adb_auto_clicker.maybe_execute(table_state, last_hero_decision)
                     except Exception as exc:

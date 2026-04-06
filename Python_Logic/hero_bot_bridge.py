@@ -554,6 +554,13 @@ class HeroBotBridge:
             if normalized_action is None:
                 continue
 
+            if (
+                player.player_index == HERO_SEAT
+                and (table.hero_to_act or self._hero_buttons_visible or table.available_actions or table.amount_buttons)
+                and not self._hero_committed_actions.get(street, ("", None))[0]
+            ):
+                continue
+
             action_key = (
                 table.hands_number,
                 player.player_index,
@@ -1063,6 +1070,18 @@ class HeroBotBridge:
 
     def get_amount_value_text(self) -> str:
         return self._hero_amount_value_text
+
+    def invalidate_hero_decision(self, hand_id: int, street: str) -> None:
+        if hand_id != self._active_hand_id:
+            return
+        street_name = str(street or "").strip().lower()
+        if street_name and street_name in self._hero_committed_actions:
+            self._hero_committed_actions[street_name] = ("", None)
+        self._last_decision_key = None
+        self._last_emitted_recommendation = None
+        self._last_turn_decision_key = None
+        self._pending_hero_turn = True
+        self._state_changed = True
 
     def _hero_is_first_to_act(self, street: str) -> bool:
         hero_pos = self._positions_map.get(HERO_SEAT, "")

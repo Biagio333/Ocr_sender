@@ -16,6 +16,8 @@ ACTION_WORDS = [
     "rilancia","orilancia",
 ]
 
+ACTION_WORD_SET = set(ACTION_WORDS)
+
 
 
 
@@ -246,13 +248,9 @@ class PlayerBase:
         n = normalize(name)
         
         set_new_name = True
-        for w in ACTION_WORDS:
-                if w in n:
-                    set_new_name = False
-                    if n[0] == 'o':
-                        n=n[1:]
-                    self.inferred_action = n
-                    continue
+        if n in ACTION_WORD_SET:
+            set_new_name = False
+            self.inferred_action = n[1:] if n.startswith("o") else n
         if n == '':
             set_new_name = False
 

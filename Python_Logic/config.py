@@ -29,7 +29,7 @@ ENABLE_HERO_BOT = True
 HERO_BOT_KIND = "negreanu_v2"
 
 #HERO_BOT_PROFILE = "blind_stealer"
-HERO_BOT_PROFILE = "nit_killer"
+HERO_BOT_PROFILE = "live_default"
 
 # Auto click ADB
 ENABLE_ADB_AUTOCLICK = True

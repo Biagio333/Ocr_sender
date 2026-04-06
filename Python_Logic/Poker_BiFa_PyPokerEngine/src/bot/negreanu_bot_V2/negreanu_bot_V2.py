@@ -107,6 +107,28 @@ def make_profile(profile_name: str) -> negreanu_V2_BotConfig:
             fold_vs_heavy_resistance_penalty=0.10,
         )
 
+    if name == "live_default":
+        return negreanu_V2_BotConfig(
+            name="live_default",
+            aggression=0.71,
+            looseness=0.57,
+            preflop_raise_threshold=0.64,
+            preflop_call_threshold=0.39,
+            postflop_raise_threshold=0.72,
+            postflop_call_threshold=0.43,
+            cheap_call_bonus=0.10,
+            draw_bonus=0.13,
+            top_pair_bonus=0.11,
+            overpair_bonus=0.16,
+            steal_bonus_late=0.09,
+            isolate_bonus=0.07,
+            short_stack_push_bonus=0.07,
+            big_stack_bully_bonus=0.08,
+            cbet_bonus_dry=0.07,
+            second_barrel_scare_bonus=0.05,
+            fold_vs_heavy_resistance_penalty=0.08,
+        )
+
     return negreanu_V2_BotConfig(name=name or "smart_aggro")
 
 
@@ -146,6 +168,15 @@ def card_rank_index(card) -> int:
 def card_suit(card) -> str:
     _, suit = parse_card(card)
     return suit
+
+
+def _is_pocket_pair(cards) -> bool:
+    if not isinstance(cards, (list, tuple)) or len(cards) != 2:
+        return False
+    try:
+        return card_rank_index(cards[0]) == card_rank_index(cards[1])
+    except Exception:
+        return False
 
 
 # =========================================================
@@ -531,18 +562,28 @@ def _is_flat_call_candidate(
 ) -> bool:
     hi, lo, suited, pair, gap = _hole_features(cards)
     if pair:
-        return hi >= rank_to_index("5")
+        return hi >= rank_to_index("4")
     if hi == rank_to_index("A"):
         if suited:
-            return lo >= rank_to_index("6")
-        return lo >= rank_to_index("T")
+            return lo >= rank_to_index("5")
+        return lo >= rank_to_index("9")
     if hi >= rank_to_index("K") and lo >= rank_to_index("Q"):
         return True
     if hi >= rank_to_index("Q") and lo >= rank_to_index("J"):
         return True
+    if hi >= rank_to_index("J") and lo >= rank_to_index("T") and gap <= 1:
+        return True
     if suited and gap <= 1 and hi >= rank_to_index("T") and effective_stack_bb >= 16:
         return True
+    if suited and hi >= rank_to_index("9") and lo >= rank_to_index("7") and gap <= 2 and effective_stack_bb >= 18:
+        return True
     if _is_blind(position) and suited and hi >= rank_to_index("9") and lo >= rank_to_index("7") and gap <= 2:
+        return True
+    if _is_blind(position) and hi == rank_to_index("A") and lo >= rank_to_index("7"):
+        return True
+    if _is_blind(position) and hi >= rank_to_index("K") and lo >= rank_to_index("T") and gap <= 2:
+        return True
+    if _is_blind(position) and hi >= rank_to_index("Q") and lo >= rank_to_index("9") and gap <= 2 and effective_stack_bb >= 18:
         return True
     return strength >= 0.68
 
@@ -560,12 +601,30 @@ def _is_blind_defend_continue_candidate(
     if not _is_late_position(aggressor_position):
         return False
     if pair:
-        return hi >= rank_to_index("4")
+        return True
     if suited and hi >= rank_to_index("J") and lo >= rank_to_index("T") and gap <= 1:
+        return True
+    if suited and hi >= rank_to_index("K") and lo >= rank_to_index("8") and gap <= 2:
+        return True
+    if suited and hi >= rank_to_index("Q") and lo >= rank_to_index("8") and gap <= 2:
         return True
     if suited and hi >= rank_to_index("T") and lo >= rank_to_index("8") and gap <= 1 and effective_stack_bb >= 18:
         return True
-    if hi == rank_to_index("A") and suited and lo >= rank_to_index("5"):
+    if hi == rank_to_index("A") and suited and lo >= rank_to_index("2"):
+        return True
+    if hi == rank_to_index("A") and lo >= rank_to_index("7"):
+        return True
+    if hi >= rank_to_index("K") and lo >= rank_to_index("J") and gap <= 1:
+        return True
+    if hi >= rank_to_index("K") and lo >= rank_to_index("T") and gap <= 2:
+        return True
+    if hi >= rank_to_index("Q") and lo >= rank_to_index("T") and gap <= 1 and effective_stack_bb >= 16:
+        return True
+    if hi >= rank_to_index("Q") and lo >= rank_to_index("9") and gap <= 2 and effective_stack_bb >= 18:
+        return True
+    if position == "SB" and hi >= rank_to_index("T") and lo >= rank_to_index("8") and gap <= 2 and effective_stack_bb >= 18:
+        return True
+    if suited and hi >= rank_to_index("8") and lo >= rank_to_index("5") and gap <= 2 and effective_stack_bb >= 18:
         return True
     return strength >= 0.62 and suited and gap <= 1 and hi >= rank_to_index("T")
 
@@ -1246,7 +1305,7 @@ class SmartParametricBot:
 
         if players_in_hand > 2:
             if info["top_pair"] or info["second_pair"] or info["overpair"]:
-                strength -= 0.06
+                strength -= 0.03
             else:
                 strength -= 0.03
 
@@ -1275,16 +1334,22 @@ class SmartParametricBot:
             strength += 0.05
 
         if info["flush_draw_with_hole"] or info["straight_draw_with_hole"]:
-            strength += 0.02
+            strength += 0.04
+
+        if (
+            (info["top_pair"] or info["second_pair"])
+            and (info["flush_draw_with_hole"] or info["straight_draw_with_hole"])
+        ):
+            strength += 0.05
 
         if info["nut_flush_draw"]:
             strength += 0.03
 
         if info["top_pair"] and info["board_texture"] in {"wet", "very_wet", "monotone", "paired_wet"}:
-            strength -= 0.06
+            strength -= 0.03
 
         if info["overpair"] and info["board_texture"] in {"wet", "very_wet", "monotone", "paired", "paired_wet"}:
-            strength -= 0.05
+            strength -= 0.03
 
         return _clamp(strength, 0.0, 1.0)
 
@@ -1397,6 +1462,7 @@ class SmartParametricBot:
 
         if street == "flop":
             raise_threshold -= 0.02
+            call_threshold -= 0.03
         elif street == "river":
             raise_threshold += 0.08
             call_threshold += 0.10
@@ -1601,6 +1667,32 @@ class SmartParametricBot:
         if _has_strong_made_hand(info):
             return False
 
+        cheap_continue = call_ratio <= 0.10 or (pot > 0 and (call_amount / max(pot, 1.0)) <= 0.28)
+
+        if info["combo_draw"] and cheap_continue:
+            return False
+
+        if info["flush_draw_with_hole"] and info["straight_draw_with_hole"] and cheap_continue:
+            return False
+
+        if info["straight_draw_with_hole"] and street == "flop" and cheap_continue:
+            return False
+
+        if info["flush_draw_with_hole"] and street in {"flop", "turn"} and cheap_continue:
+            return False
+
+        if info["top_pair"] and (info["flush_draw_with_hole"] or info["straight_draw_with_hole"]) and medium_bet:
+            return False
+
+        if info["second_pair"] and (info["flush_draw_with_hole"] or info["straight_draw_with_hole"]) and cheap_continue:
+            return False
+
+        if info["top_pair"] and cheap_continue:
+            return False
+
+        if info["second_pair"] and street == "flop" and cheap_continue and players_in_hand <= 2:
+            return False
+
         if players_in_hand > 2 and medium_bet and not info["top_pair"]:
             return True
 
@@ -1711,6 +1803,31 @@ class SmartParametricBot:
                 return action
 
             if raise_count == 1:
+                if (
+                    call_amount > 0
+                    and _is_pocket_pair(hole_cards)
+                    and _is_blind(position)
+                    and call_ratio <= 0.08
+                    and effective_stack_bb >= 18
+                ):
+                    bb_units = _safe_int((stats_context or {}).get("big_blind", 0), 0)
+                    if position == "SB" and bb_units > 0:
+                        target_amount = max(
+                            _safe_int(_safe_get(state, "min_completion_betting_or_raising_to_amount", 0), 0),
+                            bb_units * 10,
+                        )
+                        max_raise_to = _safe_int(_safe_get(state, "max_completion_betting_or_raising_to_amount", 0), 0)
+                        if max_raise_to > 0:
+                            target_amount = min(target_amount, max_raise_to)
+                        if target_amount > 0:
+                            action = BotAction("raise", target_amount)
+                            self._record_stats_decision(action, stats_context)
+                            return action
+
+                    action = BotAction("call", call_amount)
+                    self._record_stats_decision(action, stats_context)
+                    return action
+
                 if strength >= raise_threshold + 0.05 and _is_value_reraise_candidate(hole_cards, effective_stack_bb, strength):
                     amount = self._raise_amount(state, stack, max(strength, 0.74), "preflop", stats_context)
                     if amount is not None:
@@ -1737,6 +1854,23 @@ class SmartParametricBot:
                         preflop_aggressor_position,
                         effective_stack_bb,
                         strength,
+                    )
+                ):
+                    action = BotAction("call", call_amount)
+                    self._record_stats_decision(action, stats_context)
+                    return action
+
+                hi, lo, suited, pair, gap = _hole_features(hole_cards)
+                if (
+                    call_amount > 0
+                    and _is_blind(position)
+                    and call_ratio <= 0.08
+                    and effective_stack_bb >= 18
+                    and (
+                        (suited and hi >= rank_to_index("8") and lo >= rank_to_index("6") and gap <= 2)
+                        or (hi == rank_to_index("A") and lo >= rank_to_index("7"))
+                        or (hi >= rank_to_index("K") and lo >= rank_to_index("T") and gap <= 2)
+                        or (position == "SB" and hi >= rank_to_index("T") and lo >= rank_to_index("8") and gap <= 2)
                     )
                 ):
                     action = BotAction("call", call_amount)
@@ -1894,6 +2028,21 @@ class SmartParametricBot:
             self._record_stats_decision(action, stats_context)
             return action
 
+        if call_amount > 0 and info["overpair"]:
+            small_bet = call_ratio <= 0.12 or (pot > 0 and (call_amount / max(pot, 1.0)) <= 0.33)
+            board_not_extreme = info["board_texture"] not in {"very_wet", "monotone"}
+            if small_bet or board_not_extreme:
+                action = self._passive_action(call_amount)
+                self._record_stats_decision(action, stats_context)
+                return action
+
+        if call_amount > 0 and info["top_pair"] and info["kicker_strength"] >= 0.70:
+            cheap_continue = call_ratio <= 0.08 or (pot > 0 and (call_amount / max(pot, 1.0)) <= 0.25)
+            if cheap_continue:
+                action = self._passive_action(call_amount)
+                self._record_stats_decision(action, stats_context)
+                return action
+
         approx_equity = 0.0
         if info["combo_draw"]:
             approx_equity = 0.40
@@ -1922,6 +2071,26 @@ class SmartParametricBot:
             return action
 
         if call_amount == 0:
+            if (
+                _norm_text((stats_context or {}).get("street", "")) in {"flop", "turn"}
+                and (
+                    info["overpair"]
+                    or (info["top_pair"] and info["kicker_strength"] >= 0.70)
+                    or info["two_pair_with_hole"]
+                )
+            ):
+                amount = self._raise_amount(
+                    state,
+                    stack,
+                    0.67 if players_in_hand > 2 else 0.71,
+                    "postflop",
+                    self._with_bet_profile(stats_context, "value_medium"),
+                )
+                if amount is not None:
+                    action = BotAction("raise", amount)
+                    self._record_stats_decision(action, stats_context)
+                    return action
+
             if self._should_stab(info, stats_context):
                 amount = self._raise_amount(
                     state,

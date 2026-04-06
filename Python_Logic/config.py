@@ -22,7 +22,7 @@ REPLAY_INPUT_PATH = BASE_DIR / "packets_tourney.db"
 # Visualizzazioni
 ENABLE_JSON_VIEWER = False
 ENABLE_TABLE_VIEWER = False
-ENABLE_BUTTON_DEBUG_LOGS = True
+ENABLE_BUTTON_DEBUG_LOGS = False
 
 # Hero bot live bridge
 ENABLE_HERO_BOT = True

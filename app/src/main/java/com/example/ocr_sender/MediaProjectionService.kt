@@ -64,10 +64,23 @@ class MediaProjectionService : Service() {
     
     // Struttura per i template OpenCV
     data class OpenCVTemplate(val name: String, val mat: Mat)
+    data class CardMatchCandidate(val name: String, val score: Double)
+    data class CardMatchResult(
+        val acceptedName: String?,
+        val bestScore: Double,
+        val topMatches: List<CardMatchCandidate>
+    )
+    data class HeroCardStabilityState(
+        var stableName: String? = null,
+        var pendingName: String? = null,
+        var pendingCount: Int = 0,
+        var missingCount: Int = 0
+    )
     private val loadedTemplatesBoard = mutableListOf<OpenCVTemplate>()
     private val loadedTemplatesHero = mutableListOf<OpenCVTemplate>()
     private var coveredCardTemplate: OpenCVTemplate? = null
     private var dealerButtonTemplate: OpenCVTemplate? = null
+    private val heroCardStates = mutableMapOf<String, HeroCardStabilityState>()
 
     data class PokerCard(
         val id: Int,
@@ -133,6 +146,8 @@ class MediaProjectionService : Service() {
         
         // Fattore di scala per le carte in mano (Hero)
         private const val HERO_CARD_SCALE_FACTOR = 1.16
+        private const val HERO_CARD_STABLE_FRAMES = 2
+        private const val HERO_CARD_MISS_FRAMES_TO_CLEAR = 2
     }
 
     override fun onCreate() {
@@ -337,7 +352,10 @@ class MediaProjectionService : Service() {
                         labelsHero.forEachIndexed { idx, label ->
                             findRectByLabel(shapes, label, scaleX, scaleY)?.let { rect ->
                                 searchRects.add(rect)
-                                matchCardOpenCV(screen, rect, loadedTemplatesHero)?.let { name ->
+                                val match = matchCardOpenCVDetailed(screen, rect, loadedTemplatesHero)
+                                val stableName = stabilizeHeroCard(label, match.acceptedName)
+                                logHeroCardMatch(label, rect, match, stableName)
+                                stableName?.let { name ->
                                     pokerCards.add(PokerCard(10 + idx, name, rect))
                                 }
                             }
@@ -560,10 +578,19 @@ class MediaProjectionService : Service() {
     }
 
     private fun matchCardOpenCV(screen: Bitmap, rect: Rect, templates: List<OpenCVTemplate>): String? {
-        val (sourceMat, _) = buildGraySourceMat(screen, rect) ?: return null
+        return matchCardOpenCVDetailed(screen, rect, templates).acceptedName
+    }
 
-        var bestName: String? = null
-        var minVal = 1.0
+    private fun matchCardOpenCVDetailed(
+        screen: Bitmap,
+        rect: Rect,
+        templates: List<OpenCVTemplate>
+    ): CardMatchResult {
+        val source = buildGraySourceMat(screen, rect)
+            ?: return CardMatchResult(null, 1.0, emptyList())
+        val (sourceMat, _) = source
+
+        val matches = mutableListOf<CardMatchCandidate>()
 
         for (t in templates) {
             if (t.mat.cols() > sourceMat.cols() || t.mat.rows() > sourceMat.rows()) continue
@@ -571,19 +598,81 @@ class MediaProjectionService : Service() {
             val result = Mat()
             Imgproc.matchTemplate(sourceMat, t.mat, result, Imgproc.TM_SQDIFF_NORMED)
             val mmr = Core.minMaxLoc(result)
-            
-            if (mmr.minVal < minVal) {
-                minVal = mmr.minVal
-                bestName = t.name
-            }
+            matches.add(CardMatchCandidate(t.name, mmr.minVal))
             result.release()
         }
         sourceMat.release()
 
-        return if (minVal < OPENCV_MATCH_THRESHOLD) {
-            Log.d(TAG, "OpenCV TROVATA: $bestName ($minVal)")
-            bestName
-        } else null
+        val topMatches = matches.sortedBy { it.score }.take(3)
+        val bestMatch = topMatches.firstOrNull()
+        val acceptedName = bestMatch?.name?.takeIf { (bestMatch.score) < OPENCV_MATCH_THRESHOLD }
+
+        if (acceptedName != null) {
+            Log.d(TAG, "OpenCV TROVATA: $acceptedName (${bestMatch?.score})")
+        }
+
+        return CardMatchResult(
+            acceptedName = acceptedName,
+            bestScore = bestMatch?.score ?: 1.0,
+            topMatches = topMatches
+        )
+    }
+
+    private fun stabilizeHeroCard(label: String, detectedName: String?): String? {
+        val state = heroCardStates.getOrPut(label) { HeroCardStabilityState() }
+
+        if (detectedName.isNullOrBlank()) {
+            state.pendingName = null
+            state.pendingCount = 0
+            state.missingCount += 1
+            if (state.missingCount >= HERO_CARD_MISS_FRAMES_TO_CLEAR) {
+                state.stableName = null
+            }
+            return state.stableName
+        }
+
+        state.missingCount = 0
+
+        if (state.stableName == detectedName) {
+            state.pendingName = null
+            state.pendingCount = 0
+            return state.stableName
+        }
+
+        if (state.pendingName == detectedName) {
+            state.pendingCount += 1
+        } else {
+            state.pendingName = detectedName
+            state.pendingCount = 1
+        }
+
+        if (state.pendingCount >= HERO_CARD_STABLE_FRAMES) {
+            state.stableName = detectedName
+            state.pendingName = null
+            state.pendingCount = 0
+        }
+
+        return state.stableName
+    }
+
+    private fun logHeroCardMatch(
+        label: String,
+        rect: Rect,
+        match: CardMatchResult,
+        stableName: String?
+    ) {
+        val top3 = if (match.topMatches.isEmpty()) {
+            "-"
+        } else {
+            match.topMatches.joinToString(", ") { candidate ->
+                "${candidate.name}=${"%.4f".format(candidate.score)}"
+            }
+        }
+        Log.d(
+            TAG,
+            "Hero match $label rect=[${rect.left},${rect.top},${rect.right},${rect.bottom}] " +
+                "top3=$top3 raw=${match.acceptedName ?: "-"} stable=${stableName ?: "-"}"
+        )
     }
 
     private fun matchSingleTemplate(

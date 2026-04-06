@@ -2,6 +2,7 @@
 # adb devices
 # adb reverse tcp:5000 tcp:5000
 
+import json
 import random
 import re
 import subprocess
@@ -36,7 +37,7 @@ from data_source import (
     SocketPayloadReceiver,
     create_replay_buffer,
 )
-from data_store import PacketStore
+from data_store import HeroDecisionStore, PacketStore
 from hero_bot_bridge import HeroBotBridge
 from payload_utils import payload_summary, pretty_payload
 from table_mapper import TableStateMapper
@@ -639,6 +640,38 @@ def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
     print(f"{ACCENT}{'=' * len(separator)}{RESET}")
 
 
+def _save_hero_decision_snapshot(decision_store, payload, table_state, hero_decision) -> None:
+    if decision_store is None or hero_decision is None:
+        return
+
+    raw_table = ((getattr(table_state, "raw", {}) or {}).get("table", {}) or {})
+    row = {
+        "payload_timestamp": payload.get("timestamp"),
+        "hand_id": hero_decision.hand_id,
+        "street": hero_decision.street,
+        "position": hero_decision.position,
+        "hero_cards": json.dumps(list(getattr(table_state, "hero_cards", []) or []), ensure_ascii=False),
+        "board_cards": json.dumps(list(getattr(table_state, "board_cards", []) or []), ensure_ascii=False),
+        "hero_stack": hero_decision.hero_stack,
+        "hero_bet": hero_decision.hero_bet,
+        "call_amount": hero_decision.call_amount,
+        "min_raise_to": hero_decision.min_raise_to,
+        "max_raise_to": hero_decision.max_raise_to,
+        "action_kind": hero_decision.action_kind,
+        "action_amount": hero_decision.action_amount,
+        "source_action_player": hero_decision.source_action_player,
+        "source_action_kind": hero_decision.source_action_kind,
+        "has_red_action_area": bool(raw_table.get("has_red_action_area", False)),
+        "red_action_area_avg_red": raw_table.get("red_action_area_avg_red", 0.0),
+        "available_actions": list(getattr(table_state, "available_actions", []) or []),
+        "amount_buttons": list(getattr(table_state, "amount_buttons", []) or []),
+        "selected_action_button": hero_decision.selected_action_button,
+        "selected_amount_button": hero_decision.selected_amount_button,
+        "payload": payload,
+    }
+    decision_store.save_decision(row)
+
+
 def main():
     cv2 = None
     draw_results = None
@@ -654,6 +687,7 @@ def main():
 
     payload_buffer, receiver = build_payload_buffer()
     packet_store = None
+    hero_decision_store = None
     table_mapper = TableStateMapper()
     hero_bot = None
     adb_auto_clicker = None
@@ -672,6 +706,8 @@ def main():
         )
     if DATA_SOURCE == "socket" and SAVE_INCOMING_PACKETS:
         packet_store = PacketStore(PACKET_SAVE_DIR)
+    if ENABLE_HERO_BOT:
+        hero_decision_store = HeroDecisionStore(PACKET_SAVE_DIR)
 
     index = 0
     try:
@@ -755,6 +791,7 @@ def main():
                 hero_decision = hero_bot.process_table(table_state)
                 if hero_decision is not None:
                     last_hero_decision = hero_decision
+                    _save_hero_decision_snapshot(hero_decision_store, payload, table_state, hero_decision)
                     _print_hero_bot_snapshot(table_state, hero_decision, hero_bot)
                 elif last_hero_decision is not None:
                     if (

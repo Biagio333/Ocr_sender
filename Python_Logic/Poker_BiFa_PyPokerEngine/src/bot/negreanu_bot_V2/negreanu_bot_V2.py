@@ -56,19 +56,19 @@ def make_profile(profile_name: str) -> negreanu_V2_BotConfig:
     if name == "nit_killer":
         return negreanu_V2_BotConfig(
             name="nit_killer",
-            aggression=0.72,
-            looseness=0.55,
-            preflop_raise_threshold=0.66,
-            preflop_call_threshold=0.41,
-            postflop_raise_threshold=0.72,
-            postflop_call_threshold=0.47,
-            steal_bonus_late=0.06,
-            isolate_bonus=0.05,
-            short_stack_push_bonus=0.05,
-            big_stack_bully_bonus=0.08,
-            cbet_bonus_dry=0.07,
-            second_barrel_scare_bonus=0.05,
-            fold_vs_heavy_resistance_penalty=0.14,
+            aggression=0.62,
+            looseness=0.49,
+            preflop_raise_threshold=0.71,
+            preflop_call_threshold=0.43,
+            postflop_raise_threshold=0.78,
+            postflop_call_threshold=0.50,
+            steal_bonus_late=0.03,
+            isolate_bonus=0.03,
+            short_stack_push_bonus=0.04,
+            big_stack_bully_bonus=0.04,
+            cbet_bonus_dry=0.03,
+            second_barrel_scare_bonus=0.03,
+            fold_vs_heavy_resistance_penalty=0.16,
         )
 
     if name == "blind_stealer":
@@ -1443,7 +1443,9 @@ class SmartParametricBot:
         ]):
             return "value_large"
 
-        return "semibluff_medium"
+        if info["combo_draw"] or info["nut_flush_draw"]:
+            return "semibluff_medium"
+        return "cbet_small"
 
     def _should_stab(
         self,
@@ -1464,17 +1466,25 @@ class SmartParametricBot:
 
         passive_line = players_acted_this_street >= 1 and last_action_kind in {"", "check", "call"}
 
+        if street != "flop":
+            return False
+
         if players_in_hand == 2:
             if hero_has_initiative:
                 return False
-            return passive_line and last_action_street == street and texture in {"dry", "paired"}
+            return (
+                passive_line
+                and players_acted_this_street >= 1
+                and last_action_street == street
+                and texture in {"dry", "paired"}
+            )
 
         if hero_has_initiative and not pot_was_limped_preflop:
             return False
 
         scary_or_paired = texture in {"monotone", "paired", "paired_wet", "wet", "very_wet"}
         everyone_looked_weak = players_acted_this_street >= players_in_hand - 1 and last_action_street == street
-        return everyone_looked_weak and scary_or_paired and passive_line
+        return everyone_looked_weak and scary_or_paired and passive_line and players_in_hand <= 3
 
     def _facing_strong_river_line(
         self,
@@ -1641,13 +1651,13 @@ class SmartParametricBot:
                 stack_bb=effective_stack_bb if effective_stack_bb > 0 else stack_bb,
             )
 
-            strength += (self.config.looseness - 0.5) * 0.24
+            strength += (self.config.looseness - 0.5) * 0.14
             strength = self._adapt_preflop_strength(strength, stats_context, call_ratio)
 
             raise_threshold, call_threshold = self._preflop_thresholds(stats_context)
 
             if 0 < effective_stack_bb <= 12:
-                if raise_count == 0 and strength >= max(0.54, raise_threshold - 0.10):
+                if raise_count == 0 and strength >= max(0.58, raise_threshold - 0.06):
                     if not _is_open_raise_candidate(hole_cards, position, effective_stack_bb, players_in_hand, strength):
                         action = self._passive_action(call_amount) if call_amount == 0 else BotAction("fold")
                         self._record_stats_decision(action, stats_context)
@@ -1685,12 +1695,12 @@ class SmartParametricBot:
                         self._record_stats_decision(action, stats_context)
                         return action
 
-                if _is_late_position(position) and strength >= raise_threshold - 0.10:
+                if _is_late_position(position) and strength >= raise_threshold - 0.04:
                     if not _is_open_raise_candidate(hole_cards, position, effective_stack_bb, players_in_hand, strength):
                         action = self._passive_action(call_amount) if call_amount == 0 else BotAction("fold")
                         self._record_stats_decision(action, stats_context)
                         return action
-                    amount = self._raise_amount(state, stack, max(strength, 0.58), "preflop", stats_context)
+                    amount = self._raise_amount(state, stack, max(strength, 0.62), "preflop", stats_context)
                     if amount is not None:
                         action = BotAction("raise", amount)
                         self._record_stats_decision(action, stats_context)
@@ -1701,7 +1711,7 @@ class SmartParametricBot:
                 return action
 
             if raise_count == 1:
-                if strength >= raise_threshold + 0.02 and _is_value_reraise_candidate(hole_cards, effective_stack_bb, strength):
+                if strength >= raise_threshold + 0.05 and _is_value_reraise_candidate(hole_cards, effective_stack_bb, strength):
                     amount = self._raise_amount(state, stack, max(strength, 0.74), "preflop", stats_context)
                     if amount is not None:
                         action = BotAction("raise", amount)
@@ -1769,7 +1779,7 @@ class SmartParametricBot:
 
         info = classify_postflop(hole_cards, board_cards)
         strength = postflop_strength(hole_cards, board_cards, self.config, players_in_hand=players_in_hand)
-        strength += (self.config.looseness - 0.5) * 0.10
+        strength += (self.config.looseness - 0.5) * 0.05
 
         if call_ratio < 0.03:
             strength += self.config.cheap_call_bonus * 0.20
@@ -1815,11 +1825,11 @@ class SmartParametricBot:
                 self._record_stats_decision(action, stats_context)
                 return action
 
-        if info["combo_draw"] and call_ratio <= 0.10 and players_in_hand == 2:
+        if info["combo_draw"] and call_ratio <= 0.06 and players_in_hand == 2:
             amount = self._raise_amount(
                 state,
                 stack,
-                max(strength, raise_threshold - 0.02),
+                max(strength, raise_threshold + 0.01),
                 "postflop",
                 self._with_bet_profile(stats_context, "semibluff_medium"),
             )
@@ -1832,12 +1842,12 @@ class SmartParametricBot:
             len(board_cards) == 3
             and players_in_hand == 2
             and (info["nut_flush_draw"] or (info["flush_draw_with_hole"] and info["straight_draw_with_hole"]))
-            and call_ratio <= 0.08
+            and call_ratio <= 0.05
         ):
             amount = self._raise_amount(
                 state,
                 stack,
-                max(strength, 0.72),
+                max(strength, 0.78),
                 "postflop",
                 self._with_bet_profile(stats_context, "semibluff_medium"),
             )
@@ -1916,7 +1926,7 @@ class SmartParametricBot:
                 amount = self._raise_amount(
                     state,
                     stack,
-                    0.58 if players_in_hand > 2 else 0.62,
+                    0.64 if players_in_hand > 2 else 0.68,
                     "postflop",
                     self._with_bet_profile(stats_context, "stab_small"),
                 )

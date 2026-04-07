@@ -129,6 +129,181 @@ def make_profile(profile_name: str) -> negreanu_V2_BotConfig:
             fold_vs_heavy_resistance_penalty=0.08,
         )
 
+    if name == "tag_grinder":
+        return negreanu_V2_BotConfig(
+            name="tag_grinder",
+            aggression=0.66,
+            looseness=0.52,
+            preflop_raise_threshold=0.67,
+            preflop_call_threshold=0.40,
+            postflop_raise_threshold=0.74,
+            postflop_call_threshold=0.45,
+            cheap_call_bonus=0.08,
+            draw_bonus=0.10,
+            top_pair_bonus=0.10,
+            overpair_bonus=0.16,
+            set_bonus=0.20,
+            combo_draw_bonus=0.11,
+            nut_flush_draw_bonus=0.05,
+            steal_bonus_late=0.06,
+            isolate_bonus=0.05,
+            short_stack_push_bonus=0.06,
+            big_stack_bully_bonus=0.05,
+            cbet_bonus_dry=0.06,
+            second_barrel_scare_bonus=0.04,
+            fold_vs_heavy_resistance_penalty=0.09,
+        )
+
+    if name == "balanced_reg":
+        return negreanu_V2_BotConfig(
+            name="balanced_reg",
+            aggression=0.72,
+            looseness=0.58,
+            preflop_raise_threshold=0.64,
+            preflop_call_threshold=0.40,
+            postflop_raise_threshold=0.72,
+            postflop_call_threshold=0.44,
+            cheap_call_bonus=0.09,
+            draw_bonus=0.12,
+            top_pair_bonus=0.11,
+            overpair_bonus=0.16,
+            set_bonus=0.20,
+            combo_draw_bonus=0.12,
+            nut_flush_draw_bonus=0.06,
+            steal_bonus_late=0.09,
+            isolate_bonus=0.07,
+            short_stack_push_bonus=0.07,
+            big_stack_bully_bonus=0.08,
+            cbet_bonus_dry=0.07,
+            second_barrel_scare_bonus=0.05,
+            fold_vs_heavy_resistance_penalty=0.08,
+        )
+
+    if name == "live_exploiter":
+        return negreanu_V2_BotConfig(
+            name="live_exploiter",
+            aggression=0.77,
+            looseness=0.64,
+            preflop_raise_threshold=0.61,
+            preflop_call_threshold=0.38,
+            postflop_raise_threshold=0.70,
+            postflop_call_threshold=0.43,
+            cheap_call_bonus=0.10,
+            draw_bonus=0.14,
+            top_pair_bonus=0.12,
+            overpair_bonus=0.17,
+            set_bonus=0.21,
+            combo_draw_bonus=0.14,
+            nut_flush_draw_bonus=0.07,
+            steal_bonus_late=0.12,
+            isolate_bonus=0.09,
+            short_stack_push_bonus=0.07,
+            big_stack_bully_bonus=0.10,
+            cbet_bonus_dry=0.09,
+            second_barrel_scare_bonus=0.06,
+            fold_vs_heavy_resistance_penalty=0.07,
+        )
+
+    if name == "threebet_hunter":
+        return negreanu_V2_BotConfig(
+            name="threebet_hunter",
+            aggression=0.82,
+            looseness=0.60,
+            preflop_raise_threshold=0.62,
+            preflop_call_threshold=0.39,
+            postflop_raise_threshold=0.71,
+            postflop_call_threshold=0.44,
+            cheap_call_bonus=0.08,
+            draw_bonus=0.12,
+            top_pair_bonus=0.10,
+            overpair_bonus=0.16,
+            set_bonus=0.20,
+            combo_draw_bonus=0.12,
+            nut_flush_draw_bonus=0.06,
+            steal_bonus_late=0.11,
+            isolate_bonus=0.07,
+            short_stack_push_bonus=0.08,
+            big_stack_bully_bonus=0.09,
+            cbet_bonus_dry=0.08,
+            second_barrel_scare_bonus=0.05,
+            fold_vs_heavy_resistance_penalty=0.12,
+        )
+
+    if name == "sticky_postflop":
+        return negreanu_V2_BotConfig(
+            name="sticky_postflop",
+            aggression=0.69,
+            looseness=0.59,
+            preflop_raise_threshold=0.65,
+            preflop_call_threshold=0.37,
+            postflop_raise_threshold=0.70,
+            postflop_call_threshold=0.40,
+            cheap_call_bonus=0.12,
+            draw_bonus=0.15,
+            top_pair_bonus=0.13,
+            overpair_bonus=0.17,
+            set_bonus=0.21,
+            combo_draw_bonus=0.15,
+            nut_flush_draw_bonus=0.08,
+            steal_bonus_late=0.08,
+            isolate_bonus=0.06,
+            short_stack_push_bonus=0.06,
+            big_stack_bully_bonus=0.07,
+            cbet_bonus_dry=0.06,
+            second_barrel_scare_bonus=0.05,
+            fold_vs_heavy_resistance_penalty=0.06,
+        )
+
+    if name == "shortstack_bully":
+        return negreanu_V2_BotConfig(
+            name="shortstack_bully",
+            aggression=0.78,
+            looseness=0.61,
+            preflop_raise_threshold=0.63,
+            preflop_call_threshold=0.41,
+            postflop_raise_threshold=0.72,
+            postflop_call_threshold=0.45,
+            cheap_call_bonus=0.09,
+            draw_bonus=0.12,
+            top_pair_bonus=0.10,
+            overpair_bonus=0.16,
+            set_bonus=0.20,
+            combo_draw_bonus=0.12,
+            nut_flush_draw_bonus=0.06,
+            steal_bonus_late=0.10,
+            isolate_bonus=0.08,
+            short_stack_push_bonus=0.12,
+            big_stack_bully_bonus=0.12,
+            cbet_bonus_dry=0.07,
+            second_barrel_scare_bonus=0.05,
+            fold_vs_heavy_resistance_penalty=0.09,
+        )
+
+    if name == "calling_station_punisher":
+        return negreanu_V2_BotConfig(
+            name="calling_station_punisher",
+            aggression=0.74,
+            looseness=0.56,
+            preflop_raise_threshold=0.64,
+            preflop_call_threshold=0.39,
+            postflop_raise_threshold=0.74,
+            postflop_call_threshold=0.44,
+            cheap_call_bonus=0.08,
+            draw_bonus=0.11,
+            top_pair_bonus=0.13,
+            overpair_bonus=0.18,
+            set_bonus=0.22,
+            combo_draw_bonus=0.11,
+            nut_flush_draw_bonus=0.05,
+            steal_bonus_late=0.08,
+            isolate_bonus=0.09,
+            short_stack_push_bonus=0.06,
+            big_stack_bully_bonus=0.07,
+            cbet_bonus_dry=0.05,
+            second_barrel_scare_bonus=0.04,
+            fold_vs_heavy_resistance_penalty=0.07,
+        )
+
     return negreanu_V2_BotConfig(name=name or "smart_aggro")
 
 
@@ -562,6 +737,8 @@ def _is_flat_call_candidate(
 ) -> bool:
     hi, lo, suited, pair, gap = _hole_features(cards)
     if pair:
+        if hi >= rank_to_index("2") and not _is_early_position(position):
+            return True
         return hi >= rank_to_index("4")
     if hi == rank_to_index("A"):
         if suited:
@@ -585,7 +762,11 @@ def _is_flat_call_candidate(
         return True
     if _is_blind(position) and hi >= rank_to_index("Q") and lo >= rank_to_index("9") and gap <= 2 and effective_stack_bb >= 18:
         return True
-    return strength >= 0.68
+    if not suited and hi == rank_to_index("Q") and lo < rank_to_index("J"):
+        return False
+    if not suited and hi == rank_to_index("J") and lo < rank_to_index("T"):
+        return False
+    return strength >= 0.72
 
 
 def _is_blind_defend_continue_candidate(
@@ -1463,6 +1644,9 @@ class SmartParametricBot:
         if street == "flop":
             raise_threshold -= 0.02
             call_threshold -= 0.03
+        elif street == "turn" and players_in_hand <= 2:
+            raise_threshold -= 0.02
+            call_threshold -= 0.02
         elif street == "river":
             raise_threshold += 0.08
             call_threshold += 0.10
@@ -1693,6 +1877,12 @@ class SmartParametricBot:
         if info["second_pair"] and street == "flop" and cheap_continue and players_in_hand <= 2:
             return False
 
+        if info["second_pair"] and cheap_continue and players_in_hand <= 2:
+            return False
+
+        if info["weak_pair"] and street == "flop" and cheap_continue and players_in_hand <= 2:
+            return False
+
         if players_in_hand > 2 and medium_bet and not info["top_pair"]:
             return True
 
@@ -1701,10 +1891,16 @@ class SmartParametricBot:
 
         if street in {"flop", "turn"}:
             if info["weak_pair"]:
+                if cheap_continue and players_in_hand <= 2:
+                    return False
                 return medium_bet
             if info["second_pair"]:
+                if cheap_continue and players_in_hand <= 2:
+                    return False
                 return players_in_hand > 2 or big_bet or scary_board
             if info["top_pair"] and info["kicker_strength"] < 0.62:
+                if cheap_continue:
+                    return False
                 return big_bet and scary_board
             if info["flush_draw_with_hole"] and not info["straight_draw_with_hole"] and big_bet and pot > 0 and (call_amount / max(pot, 1.0)) >= 0.55:
                 return True
@@ -1776,6 +1972,7 @@ class SmartParametricBot:
                     return action
 
             if raise_count == 0:
+                hi, lo, suited, pair, gap = _hole_features(hole_cards)
                 if strength >= raise_threshold:
                     if not _is_open_raise_candidate(hole_cards, position, effective_stack_bb, players_in_hand, strength):
                         action = self._passive_action(call_amount) if call_amount == 0 else BotAction("fold")
@@ -1798,14 +1995,31 @@ class SmartParametricBot:
                         self._record_stats_decision(action, stats_context)
                         return action
 
+                if (
+                    call_amount > 0
+                    and _is_blind(position)
+                    and call_ratio <= 0.04
+                    and (
+                        pair
+                        or (hi == rank_to_index("A") and lo >= rank_to_index("2"))
+                        or (suited and hi >= rank_to_index("K") and lo >= rank_to_index("6"))
+                        or (suited and hi >= rank_to_index("Q") and lo >= rank_to_index("8") and gap <= 2)
+                        or (position == "SB" and hi >= rank_to_index("T") and lo >= rank_to_index("8") and gap <= 2)
+                    )
+                ):
+                    action = BotAction("call", call_amount)
+                    self._record_stats_decision(action, stats_context)
+                    return action
+
                 action = self._passive_action(call_amount) if call_amount == 0 else BotAction("fold")
                 self._record_stats_decision(action, stats_context)
                 return action
 
             if raise_count == 1:
+                pocket_pair = _is_pocket_pair(hole_cards)
                 if (
                     call_amount > 0
-                    and _is_pocket_pair(hole_cards)
+                    and pocket_pair
                     and _is_blind(position)
                     and call_ratio <= 0.08
                     and effective_stack_bb >= 18
@@ -1827,6 +2041,18 @@ class SmartParametricBot:
                     action = BotAction("call", call_amount)
                     self._record_stats_decision(action, stats_context)
                     return action
+
+                if (
+                    call_amount > 0
+                    and pocket_pair
+                    and call_ratio <= 0.06
+                    and effective_stack_bb >= 20
+                    and not (raise_count >= 2)
+                ):
+                    if not _is_early_position(position) or card_rank_index(hole_cards[0]) >= rank_to_index("4"):
+                        action = BotAction("call", call_amount)
+                        self._record_stats_decision(action, stats_context)
+                        return action
 
                 if strength >= raise_threshold + 0.05 and _is_value_reraise_candidate(hole_cards, effective_stack_bb, strength):
                     amount = self._raise_amount(state, stack, max(strength, 0.74), "preflop", stats_context)
@@ -1991,7 +2217,151 @@ class SmartParametricBot:
                 return action
 
         if strength >= call_threshold:
+            street = _norm_text((stats_context or {}).get("street", ""))
             if call_amount == 0:
+                street_name = _norm_text((stats_context or {}).get("street", ""))
+                if street_name in {"flop", "turn"}:
+                    # Avoid the too-passive line where medium/strong hands auto-check
+                    # before reaching the proactive value/semi-bluff logic below.
+                    if any([
+                        info["set_made"],
+                        info["trips_with_hole"],
+                        info["straight_with_hole"],
+                        info["flush_with_hole"],
+                        info["full_house_with_hole"],
+                        info["quads_with_hole"],
+                        info["two_pair_with_hole"],
+                        info["overpair"],
+                    ]):
+                        amount = self._raise_amount(
+                            state,
+                            stack,
+                            max(strength, 0.72 if players_in_hand > 2 else 0.76),
+                            "postflop",
+                            self._with_bet_profile(stats_context, "value_medium"),
+                        )
+                        if amount is not None:
+                            action = BotAction("raise", amount)
+                            self._record_stats_decision(action, stats_context)
+                            return action
+
+                    if info["top_pair"] and info["kicker_strength"] >= 0.50:
+                        amount = self._raise_amount(
+                            state,
+                            stack,
+                            0.65 if players_in_hand > 2 else 0.69,
+                            "postflop",
+                            self._with_bet_profile(stats_context, "value_medium"),
+                        )
+                        if amount is not None:
+                            action = BotAction("raise", amount)
+                            self._record_stats_decision(action, stats_context)
+                            return action
+
+                    if (
+                        players_in_hand <= 2
+                        and info["top_pair"]
+                        and info["kicker_strength"] >= 0.28
+                    ):
+                        amount = self._raise_amount(
+                            state,
+                            stack,
+                            0.62 if street_name == "turn" else 0.64,
+                            "postflop",
+                            self._with_bet_profile(stats_context, "value_medium"),
+                        )
+                        if amount is not None:
+                            action = BotAction("raise", amount)
+                            self._record_stats_decision(action, stats_context)
+                            return action
+
+                    if (
+                        players_in_hand <= 2
+                        and street_name in {"flop", "turn"}
+                        and info["second_pair"]
+                        and (
+                            info["kicker_strength"] >= 0.45
+                            or info["flush_draw_with_hole"]
+                            or info["straight_draw_with_hole"]
+                        )
+                    ):
+                        amount = self._raise_amount(
+                            state,
+                            stack,
+                            0.58 if street_name == "turn" else 0.60,
+                            "postflop",
+                            self._with_bet_profile(stats_context, "value_medium"),
+                        )
+                        if amount is not None:
+                            action = BotAction("raise", amount)
+                            self._record_stats_decision(action, stats_context)
+                            return action
+
+                    if info["combo_draw"] or info["nut_flush_draw"]:
+                        amount = self._raise_amount(
+                            state,
+                            stack,
+                            0.64 if players_in_hand > 2 else 0.68,
+                            "postflop",
+                            self._with_bet_profile(stats_context, "semibluff_medium"),
+                        )
+                        if amount is not None:
+                            action = BotAction("raise", amount)
+                            self._record_stats_decision(action, stats_context)
+                            return action
+
+                    if (
+                        players_in_hand <= 2
+                        and street_name in {"flop", "turn"}
+                        and (
+                            info["flush_draw_with_hole"]
+                            or info["straight_draw_with_hole"]
+                        )
+                    ):
+                        amount = self._raise_amount(
+                            state,
+                            stack,
+                            0.60 if info["nut_flush_draw"] else 0.58,
+                            "postflop",
+                            self._with_bet_profile(stats_context, "semibluff_medium"),
+                        )
+                        if amount is not None:
+                            action = BotAction("raise", amount)
+                            self._record_stats_decision(action, stats_context)
+                            return action
+
+                    if (
+                        players_in_hand <= 2
+                        and info["second_pair"]
+                        and (info["flush_draw_with_hole"] or info["straight_draw_with_hole"])
+                    ):
+                        amount = self._raise_amount(
+                            state,
+                            stack,
+                            0.62,
+                            "postflop",
+                            self._with_bet_profile(stats_context, "semibluff_medium"),
+                        )
+                        if amount is not None:
+                            action = BotAction("raise", amount)
+                            self._record_stats_decision(action, stats_context)
+                            return action
+
+                action = self._passive_action(call_amount)
+                self._record_stats_decision(action, stats_context)
+                return action
+
+            if info["top_pair"] and call_ratio <= 0.12:
+                action = self._passive_action(call_amount)
+                self._record_stats_decision(action, stats_context)
+                return action
+
+            if info["second_pair"] and players_in_hand <= 2 and call_ratio <= 0.08:
+                action = self._passive_action(call_amount)
+                self._record_stats_decision(action, stats_context)
+                return action
+
+            if info["weak_pair"] and players_in_hand <= 2 and street == "flop" and call_ratio <= 0.06:
                 action = self._passive_action(call_amount)
                 self._record_stats_decision(action, stats_context)
                 return action
@@ -2085,6 +2455,55 @@ class SmartParametricBot:
                     0.67 if players_in_hand > 2 else 0.71,
                     "postflop",
                     self._with_bet_profile(stats_context, "value_medium"),
+                )
+                if amount is not None:
+                    action = BotAction("raise", amount)
+                    self._record_stats_decision(action, stats_context)
+                    return action
+
+            if (
+                _norm_text((stats_context or {}).get("street", "")) in {"flop", "turn"}
+                and players_in_hand <= 2
+                and (
+                    (info["top_pair"] and info["kicker_strength"] >= 0.28)
+                    or (
+                        info["second_pair"]
+                        and (
+                            info["kicker_strength"] >= 0.45
+                            or info["flush_draw_with_hole"]
+                            or info["straight_draw_with_hole"]
+                        )
+                    )
+                )
+            ):
+                amount = self._raise_amount(
+                    state,
+                    stack,
+                    0.60 if _norm_text((stats_context or {}).get("street", "")) == "turn" else 0.63,
+                    "postflop",
+                    self._with_bet_profile(stats_context, "value_medium"),
+                )
+                if amount is not None:
+                    action = BotAction("raise", amount)
+                    self._record_stats_decision(action, stats_context)
+                    return action
+
+            if (
+                _norm_text((stats_context or {}).get("street", "")) in {"flop", "turn"}
+                and players_in_hand <= 2
+                and (
+                    info["combo_draw"]
+                    or info["nut_flush_draw"]
+                    or info["flush_draw_with_hole"]
+                    or info["straight_draw_with_hole"]
+                )
+            ):
+                amount = self._raise_amount(
+                    state,
+                    stack,
+                    0.59 if info["straight_draw_with_hole"] and not info["flush_draw_with_hole"] else 0.62,
+                    "postflop",
+                    self._with_bet_profile(stats_context, "semibluff_medium"),
                 )
                 if amount is not None:
                     action = BotAction("raise", amount)

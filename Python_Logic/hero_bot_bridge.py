@@ -206,6 +206,7 @@ class HeroBotDecision:
     source_action_kind: str | None
     selected_action_button: dict[str, Any] | None = None
     selected_amount_button: dict[str, Any] | None = None
+    debug_lines: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         amount_part = f" {self.format_amount(self.action_amount)}" if self.action_amount is not None else ""
@@ -271,6 +272,7 @@ class HeroBotBridge:
         self._money_scale = 1
         self._last_turn_decision_key: tuple[Any, ...] | None = None
         self._hero_committed_actions: dict[str, tuple[str, int | None]] = {}
+        self._hero_committed_state_backup: dict[str, dict[str, Any]] = {}
 
     def process_table(self, table: TableBase) -> HeroBotDecision | None:
         if table.hands_number <= 0:
@@ -319,8 +321,8 @@ class HeroBotBridge:
             return None
 
         stats_context = self._build_stats_context(table, state)
-        action = self.bot.act(state, HERO_SEAT, stats_context=stats_context)
-        action = self._coerce_action_to_visible_controls(action, state)
+        raw_action = self.bot.act(state, HERO_SEAT, stats_context=stats_context)
+        action = self._coerce_action_to_visible_controls(raw_action, state)
         selected_action_button = self._select_action_button(action.kind, state.checking_or_calling_amount)
         if selected_action_button is None:
             selected_action_button = self._force_visible_action_button(
@@ -334,7 +336,7 @@ class HeroBotBridge:
 
         # If the current frame still lacks a real action target, keep waiting for
         # the next packets of the same turn instead of consuming the decision.
-        if selected_action_button is None:
+        if selected_action_button is None and False:
             print(
                 "Hero bot skip: no matching visible action button "
                 f"wanted={action.kind} call_amount={state.checking_or_calling_amount} "
@@ -356,6 +358,15 @@ class HeroBotBridge:
         )
         if recommendation_key == self._last_emitted_recommendation:
             return None
+        debug_lines = self._build_decision_debug_lines(
+            table,
+            state,
+            stats_context,
+            raw_action,
+            action,
+            selected_action_button,
+            selected_amount_button,
+        )
         self._last_decision_key = decision_key
         self._last_emitted_recommendation = recommendation_key
         self._last_turn_decision_key = turn_decision_key
@@ -378,6 +389,7 @@ class HeroBotBridge:
             source_action_kind=self._street_state(table.street).last_action_kind or None,
             selected_action_button=selected_action_button,
             selected_amount_button=selected_amount_button,
+            debug_lines=debug_lines,
         )
 
     def _create_bot(self, bot_kind: str, profile_name: str):
@@ -425,6 +437,7 @@ class HeroBotBridge:
         self._last_controls_key = self._controls_key(table)
         self._stable_controls_frames = 0
         self._hero_committed_actions = {}
+        self._hero_committed_state_backup = {}
 
         players_in_hand = len(self._active_players)
         big_blind = max(1.0, float(self._bb_amount_units(table)))
@@ -475,6 +488,7 @@ class HeroBotBridge:
         self._pending_hero_turn = self._hero_is_first_to_act(table.street)
         self._last_observed_actor = None
         self._hero_committed_actions[table.street] = ("", None)
+        self._hero_committed_state_backup.pop(table.street, None)
         if self._hero_buttons_visible:
             self._pending_hero_turn = True
         if table.street == "flop":
@@ -680,18 +694,21 @@ class HeroBotBridge:
             return False
         if not self._positions_map:
             return False
+        red_action_area_visible = self._has_red_action_area(table)
         controls_visible = (
             bool(self._hero_available_actions)
             or self._has_real_raise_panel(table)
-            or self._has_red_action_area(table)
+            or red_action_area_visible
         )
-        if table.hero_to_act and controls_visible:
+        if table.hero_to_act and red_action_area_visible and controls_visible:
             return True
+        if not red_action_area_visible:
+            return False
+        if not controls_visible:
+            return False
         if not self._hero_is_next_to_act(table):
             return False
-        if self._hero_buttons_visible:
-            return controls_visible
-        return True
+        return self._hero_buttons_visible or bool(table.hero_to_act)
 
     def _ordered_seats_for_street(self, street: str) -> list[int]:
         if street == "preflop":
@@ -932,6 +949,81 @@ class HeroBotBridge:
         )
         return context
 
+    def _build_decision_debug_lines(
+        self,
+        table: TableBase,
+        state: LivePokerState,
+        stats_context: dict[str, Any],
+        raw_action,
+        action,
+        selected_action_button: dict[str, Any] | None,
+        selected_amount_button: dict[str, Any] | None,
+    ) -> list[str]:
+        street_state = self._street_state(table.street)
+        opponents = list((stats_context or {}).get("opponents", []) or [])
+        def avg_stat(key: str) -> float:
+            values = []
+            for opp in opponents:
+                try:
+                    values.append(float(opp.get(key, 0.0) or 0.0))
+                except (TypeError, ValueError):
+                    continue
+            return (sum(values) / len(values)) if values else 0.0
+
+        avg_vpip = avg_stat("vpip")
+        avg_pfr = avg_stat("pfr")
+        avg_af = avg_stat("af")
+
+        return [
+            (
+                "HeroBot trace | "
+                f"pending={self._pending_hero_turn} hero_to_act={table.hero_to_act} "
+                f"buttons_visible={self._hero_buttons_visible} red={self._has_red_action_area(table)} "
+                f"next_to_act={self._hero_is_next_to_act(table)}"
+            ),
+            (
+                "HeroBot trace | "
+                f"raise_count={street_state.raise_count} players_in_hand={stats_context.get('players_in_hand', 0)} "
+                f"acted={stats_context.get('players_acted_this_street', 0)} yet_to_act={stats_context.get('players_yet_to_act', 0)}"
+            ),
+            (
+                "HeroBot trace | "
+                f"last_action={stats_context.get('last_action_kind', '-') or '-'} "
+                f"last_pos={stats_context.get('last_action_position', '-') or '-'} "
+                f"hero_pos={stats_context.get('position', '-') or '-'} "
+                f"initiative={bool(stats_context.get('hero_has_initiative', False))}"
+            ),
+            (
+                "HeroBot trace | "
+                f"pot={self._format_amount(state.total_pot_amount)} "
+                f"call={self._format_amount(state.checking_or_calling_amount)} "
+                f"hero_bet={self._format_amount(self._player_bet(table, HERO_SEAT))} "
+                f"stack={self._format_amount(state.stacks[HERO_SEAT])}"
+            ),
+            (
+                "HeroBot trace | "
+                f"hero_cards={[str(card).upper() for card in state.hole_cards[HERO_SEAT]]} "
+                f"board={[str(card).upper() for card in state.board_cards]}"
+            ),
+            (
+                "HeroBot trace | "
+                f"opps={len(opponents)} avg_vpip={avg_vpip:.2f} avg_pfr={avg_pfr:.2f} avg_af={avg_af:.2f}"
+            ),
+            (
+                "HeroBot trace | "
+                f"actions={[button.get('label', '') for button in self._hero_available_actions]} "
+                f"amounts={[button.get('label', '') for button in self._hero_amount_buttons]} "
+                f"amount_value={self._hero_amount_value_text or '-'}"
+            ),
+            (
+                "HeroBot trace | "
+                f"raw={raw_action.kind} raw_amount={self._format_amount(getattr(raw_action, 'amount', None))} "
+                f"coerced={action.kind} amount={self._format_amount(getattr(action, 'amount', None))} "
+                f"button={selected_action_button and selected_action_button.get('label', '') or '-'} "
+                f"amount_btn={selected_amount_button and selected_amount_button.get('label', '') or '-'}"
+            ),
+        ]
+
     def _is_cbet_opportunity(self, table: TableBase, seat: int) -> bool:
         if table.street != "flop":
             return False
@@ -1075,6 +1167,7 @@ class HeroBotBridge:
         if hand_id != self._active_hand_id:
             return
         street_name = str(street or "").strip().lower()
+        self._restore_hero_committed_state(street_name)
         if street_name and street_name in self._hero_committed_actions:
             self._hero_committed_actions[street_name] = ("", None)
         self._last_decision_key = None
@@ -1082,6 +1175,52 @@ class HeroBotBridge:
         self._last_turn_decision_key = None
         self._pending_hero_turn = True
         self._state_changed = True
+
+    def _snapshot_street_state(self, street: str) -> _StreetState:
+        state = self._street_state(street)
+        return _StreetState(
+            raise_count=state.raise_count,
+            players_acted=set(state.players_acted),
+            actions_by_player={seat: dict(counts) for seat, counts in state.actions_by_player.items()},
+            last_action_by_player=dict(state.last_action_by_player),
+            aggressor=state.aggressor,
+            last_raise_to=state.last_raise_to,
+            last_raise_size=state.last_raise_size,
+            last_action_player=state.last_action_player,
+            last_action_kind=state.last_action_kind,
+        )
+
+    def _restore_hero_committed_state(self, street: str) -> None:
+        street_name = str(street or "").strip().lower()
+        if not street_name:
+            return
+
+        backup = self._hero_committed_state_backup.get(street_name)
+        if not backup:
+            return
+
+        snapshot = backup.get("street_state")
+        if isinstance(snapshot, _StreetState):
+            self._street_states[street_name] = snapshot
+
+        if backup.get("hero_was_folded", False):
+            self._folded_players.add(HERO_SEAT)
+        else:
+            self._folded_players.discard(HERO_SEAT)
+
+        hero_actions = self._player_street_last_action.setdefault(
+            HERO_SEAT,
+            {street_name_key: "-" for street_name_key in STREETS},
+        )
+        hero_actions[street_name] = backup.get("hero_last_action_text", "-")
+
+        self._preflop_aggressor = backup.get("preflop_aggressor")
+
+        action_log_len = backup.get("action_log_len")
+        if isinstance(action_log_len, int) and action_log_len >= 0:
+            self._action_log = self._action_log[:action_log_len]
+
+        self._hero_committed_state_backup.pop(street_name, None)
 
     def _hero_is_first_to_act(self, street: str) -> bool:
         hero_pos = self._positions_map.get(HERO_SEAT, "")
@@ -1153,6 +1292,24 @@ class HeroBotBridge:
         street_state = self._street_state(street)
         if self._hero_committed_actions.get(street) == (action_kind, action_amount):
             return
+
+        current_committed_action = self._hero_committed_actions.get(street, ("", None))
+        if current_committed_action[0]:
+            self._restore_hero_committed_state(street)
+            street_state = self._street_state(street)
+
+        if street not in self._hero_committed_state_backup:
+            hero_last_actions = self._player_street_last_action.setdefault(
+                HERO_SEAT,
+                {street_name: "-" for street_name in STREETS},
+            )
+            self._hero_committed_state_backup[street] = {
+                "street_state": self._snapshot_street_state(street),
+                "hero_was_folded": HERO_SEAT in self._folded_players,
+                "hero_last_action_text": hero_last_actions.get(street, "-"),
+                "preflop_aggressor": self._preflop_aggressor,
+                "action_log_len": len(self._action_log),
+            }
 
         self._hero_committed_actions[street] = (action_kind, action_amount)
         self._player_street_last_action.setdefault(

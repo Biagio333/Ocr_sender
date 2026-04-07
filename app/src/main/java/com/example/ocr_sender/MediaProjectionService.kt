@@ -1302,6 +1302,16 @@ class MediaProjectionService : Service() {
             maxWidth = maxOf(maxWidth, right - left)
         }
 
+        if (labels.any {
+                it.contains("raise") ||
+                    it.contains("rilancia") ||
+                    it.contains("punta") ||
+                    it.contains("bet")
+            }
+        ) {
+            return false
+        }
+
         val shortcutCount = (0 until amountButtons.length()).count { index ->
             val button = amountButtons.optJSONObject(index) ?: return@count false
             val roiLabel = button.optString("roi_label").lowercase()
@@ -1345,10 +1355,13 @@ class MediaProjectionService : Service() {
         if (amountValueText.isNotBlank()) return true
 
         var shortcutCount = 0
+        var hasPlusMinus = false
+        var hasRaiseRegion = false
         for (index in 0 until amountButtons.length()) {
             val button = amountButtons.optJSONObject(index) ?: continue
             when (button.optString("roi_label").lowercase()) {
                 "select_amount_button" -> {
+                    hasRaiseRegion = true
                     shortcutCount += 1
                     val label = button.optString("label").trim().lowercase()
                     if (label.isNotBlank() && label != "raise") {
@@ -1356,11 +1369,14 @@ class MediaProjectionService : Service() {
                     }
                 }
                 "select_amount_plus", "select_amount_minus" -> {
+                    hasPlusMinus = true
                     shortcutCount += 1
                 }
             }
         }
-        return shortcutCount >= 3
+        if (shortcutCount >= 3) return true
+        if (hasRaiseRegion && hasPlusMinus) return true
+        return hasPlusMinus && shortcutCount >= 2
     }
 
     private fun buildPlayersJson(ocrItems: List<OcrItem>, pokerCards: List<PokerCard>): JSONArray {

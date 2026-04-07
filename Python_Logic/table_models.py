@@ -125,6 +125,41 @@ def normalize(text: str) -> str:
     text = text.replace(" ", "").lower()
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
+
+def _looks_like_non_name_label(text: str) -> bool:
+    value = normalize(text)
+    if not value:
+        return True
+
+    if value in ACTION_WORD_SET:
+        return True
+
+    if value.startswith("vin") or value.startswith("ovin"):
+        return True
+
+    if value.startswith("metti") or value.startswith("ometti"):
+        return True
+
+    if value.startswith("chiama") or value.startswith("ochiama"):
+        return True
+
+    if value.startswith("check") or value.startswith("ocheck"):
+        return True
+
+    if value.startswith("fold") or value.startswith("ofold"):
+        return True
+
+    if value.startswith("puntata") or value.startswith("opuntata"):
+        return True
+
+    if value.startswith("rilancia") or value.startswith("orilancia"):
+        return True
+
+    if value.startswith("tempo") or value.startswith("otempo"):
+        return True
+
+    return False
+
 def extract_amount_candidates(text: str) -> list[float]:
     if not text:
         return []
@@ -248,11 +283,9 @@ class PlayerBase:
         n = normalize(name)
         
         set_new_name = True
-        if n in ACTION_WORD_SET:
+        if _looks_like_non_name_label(n):
             set_new_name = False
             self.inferred_action = n[1:] if n.startswith("o") else n
-        if n == '':
-            set_new_name = False
 
         if set_new_name:  
             self.name_stabilizer.update(n)

@@ -50,7 +50,7 @@ BLIND_STRUCTURE = [
     (1000, 2000),
 ]
 
-LEVEL_DURATION_MINUTES = 5
+LEVEL_DURATION_MINUTES = 500000000000000000
 PLAYER_RESPONSE_TIME_SECONDS = 4
 
 POSITION_NAMES_BY_PLAYER_COUNT = {
@@ -67,20 +67,20 @@ POSITION_NAMES_BY_PLAYER_COUNT = {
 
 def _build_negreanu_v2_lineup():
     fixed_bots = [
-        BotNegreanuV2(profile_name="blind_stealer"),
-        BotNegreanuV2(profile_name="nit_killer"),
-        BotNegreanuV2(profile_name="shortstack_reaper"),
-        BotNegreanuV1( profile_name = "nit_killer"),
-        BotNegreanuV1( profile_name = "blind_stealer" ),
-        BotNegreanuV1 ( profile_name = "shortstack_reaper" ),
+        BotNegreanuV2(profile_name="tag_grinder"),
+        BotNegreanuV2(profile_name="balanced_reg"),
+        BotNegreanuV2(profile_name="live_exploiter"),
+        BotNegreanuV2(profile_name="threebet_hunter"),
+        BotNegreanuV2(profile_name="sticky_postflop"),
+        BotNegreanuV2(profile_name="calling_station_punisher"),
     ]
 
-    fixed_bots[0].name = "NV2 Blind Stealer"
-    fixed_bots[1].name = "NV2 Nit Killer"
-    fixed_bots[2].name = "NV2 Shortstack Reaper"
-    fixed_bots[3].name = "NV1 Nit Killer"
-    fixed_bots[4].name = "NV1 Blind Stealer"
-    fixed_bots[5].name = "NV1 Shortstack Reaper"
+    fixed_bots[0].name = "NV2 Tag Grinder"
+    fixed_bots[1].name = "NV2 Balanced Reg"
+    fixed_bots[2].name = "NV2 Live Exploiter"
+    fixed_bots[3].name = "NV2 Threebet Hunter"
+    fixed_bots[4].name = "NV2 Sticky Postflop"
+    fixed_bots[5].name = "NV2 Station Punisher"
     return fixed_bots
 
 

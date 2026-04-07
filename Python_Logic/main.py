@@ -345,6 +345,43 @@ def _find_live_action_button(table_state, hero_decision) -> dict | None:
     return fallback
 
 
+def _find_live_amount_button(table_state, hero_decision) -> dict | None:
+    if hero_decision is None:
+        return None
+    selected_amount_button = getattr(hero_decision, "selected_amount_button", None)
+    if not selected_amount_button:
+        return None
+
+    wanted_label = str(selected_amount_button.get("label", "")).strip()
+    if not wanted_label:
+        return None
+
+    selected_signature = _tap_point_signature(selected_amount_button)
+    amount_buttons = list(getattr(table_state, "amount_buttons", []) or [])
+    fallback = None
+    for button in amount_buttons:
+        label = str(button.get("label", "")).strip()
+        if label != wanted_label:
+            continue
+        if _tap_point_signature(button) == selected_signature:
+            return button
+        if fallback is None:
+            fallback = button
+
+    return fallback
+
+
+def _force_any_live_action_button(table_state) -> dict | None:
+    available_actions = list(getattr(table_state, "available_actions", []) or [])
+    for button in available_actions:
+        label = str(button.get("label", "")).strip()
+        if not label or _is_meta_control_label(label):
+            continue
+        if _button_action_kind(button):
+            return button
+    return None
+
+
 def _is_meta_control_label(text: str) -> bool:
     label = _normalized_button_label(text)
     if not label:
@@ -495,8 +532,6 @@ class AdbAutoClicker:
             hero_decision.street,
             hero_decision.action_kind,
             hero_decision.action_amount,
-            _tap_point_signature(hero_decision.selected_action_button),
-            _tap_point_signature(hero_decision.selected_amount_button),
         )
         now = time.monotonic()
         if execution_key != self._last_execution_key:
@@ -669,6 +704,8 @@ def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
     else:
         for action_line in action_log:
             print(f"  - {action_line}")
+    for debug_line in getattr(hero_decision, "debug_lines", []) or []:
+        print(debug_line)
     print(f"{HERO_BLUE}{hero_decision.summary()}{RESET}")
     print(
         "Click target : "
@@ -891,11 +928,18 @@ def main():
                         last_hero_decision = None
 
                 if adb_auto_clicker is not None and has_red_action_area and last_hero_decision is not None:
-                    live_action_button = _find_live_action_button(table_state, last_hero_decision)
-                    if live_action_button is None:
+                    current_action_kinds = {
+                        _button_action_kind(button, int(getattr(last_hero_decision, "call_amount", 0) or 0))
+                        for button in current_available_actions
+                    }
+                    current_action_kinds.discard("")
+                    if (
+                        last_hero_decision.action_kind == "fold"
+                        and "fold" not in current_action_kinds
+                        and current_action_kinds.intersection({"check", "call", "raise"})
+                    ):
                         print(
-                            "ADB autoclick | skip stale decision: "
-                            f"wanted={last_hero_decision.action_kind} "
+                            "ADB autoclick | invalidate stale fold: "
                             f"buttons={_button_labels(current_available_actions)}"
                         )
                         hero_bot.invalidate_hero_decision(
@@ -905,7 +949,33 @@ def main():
                         last_hero_decision = None
                         continue
 
+                    live_action_button = _find_live_action_button(table_state, last_hero_decision)
+                    if live_action_button is None:
+                        forced_button = _force_any_live_action_button(table_state)
+                        if forced_button is not None:
+                            print(
+                                "ADB autoclick | force visible action: "
+                                f"wanted={last_hero_decision.action_kind} "
+                                f"forced={forced_button.get('label', '')}"
+                            )
+                            live_action_button = forced_button
+                        else:
+                            print(
+                                "ADB autoclick | skip stale decision: "
+                                f"wanted={last_hero_decision.action_kind} "
+                                f"buttons={_button_labels(current_available_actions)}"
+                            )
+                            hero_bot.invalidate_hero_decision(
+                                last_hero_decision.hand_id,
+                                last_hero_decision.street,
+                            )
+                            last_hero_decision = None
+                            continue
+
                     last_hero_decision.selected_action_button = live_action_button
+                    live_amount_button = _find_live_amount_button(table_state, last_hero_decision)
+                    if live_amount_button is not None:
+                        last_hero_decision.selected_amount_button = live_amount_button
                     try:
                         adb_auto_clicker.maybe_execute(table_state, last_hero_decision)
                     except Exception as exc:

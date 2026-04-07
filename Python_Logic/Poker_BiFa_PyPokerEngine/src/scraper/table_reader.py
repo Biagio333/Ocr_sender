@@ -177,32 +177,47 @@ class TableReader:
         max_y = max(item["y"] + item["h"] for item in ordered)
 
         text_rect = {
-            "x": int(min_x),
-            "y": int(min_y),
-            "w": int(max_x - min_x),
-            "h": int(max_y - min_y),
+            "left": int(min_x),
+            "top": int(min_y),
+            "right": int(max_x),
+            "bottom": int(max_y),
         }
+        text_width = max(1, text_rect["right"] - text_rect["left"])
+        text_height = max(1, text_rect["bottom"] - text_rect["top"])
         has_amount = amount is not None
         expand_ratio = 0.10 if has_amount else 1.00
 
-        pad_x = max(1, int(text_rect["w"] * expand_ratio / 2))
-        pad_y = max(1, int(text_rect["h"] * expand_ratio / 2))
+        pad_x = max(1, int(text_width * expand_ratio / 2))
+        pad_y = max(1, int(text_height * expand_ratio / 2))
 
         button_rect = {
-            "x": max(0, text_rect["x"] - pad_x),
-            "y": max(0, text_rect["y"] - pad_y),
-            "w": text_rect["w"] + (pad_x * 2),
-            "h": text_rect["h"] + (pad_y * 2),
+            "left": max(0, text_rect["left"] - pad_x),
+            "top": max(0, text_rect["top"] - pad_y),
+            "right": text_rect["right"] + pad_x,
+            "bottom": text_rect["bottom"] + pad_y,
         }
+        button_width = max(1, button_rect["right"] - button_rect["left"])
+        button_height = max(1, button_rect["bottom"] - button_rect["top"])
+        click_rect = {
+            "left": button_rect["left"] + max(1, int(button_width * 0.15)),
+            "top": button_rect["top"] + max(1, int(button_height * 0.20)),
+            "right": button_rect["right"] - max(1, int(button_width * 0.15)),
+            "bottom": button_rect["bottom"] - max(1, int(button_height * 0.20)),
+        }
+        if click_rect["right"] <= click_rect["left"] or click_rect["bottom"] <= click_rect["top"]:
+            click_rect = dict(button_rect)
         click_point = {
-            "x": random.randint(button_rect["x"], button_rect["x"] + button_rect["w"]),
-            "y": random.randint(button_rect["y"], button_rect["y"] + button_rect["h"]),
+            "x": random.randint(click_rect["left"], click_rect["right"] - 1),
+            "y": random.randint(click_rect["top"], click_rect["bottom"] - 1),
         }
 
         return {
             "label": full_text,
+            "roi_label": roi_name,
             "ocr_rect": text_rect,
-            "ocr_rect_area": int(text_rect["w"] * text_rect["h"]),
+            "button_rect": button_rect,
+            "click_rect": click_rect,
+            "ocr_rect_area": int(text_width * text_height),
             "click_point": click_point,
         }
 

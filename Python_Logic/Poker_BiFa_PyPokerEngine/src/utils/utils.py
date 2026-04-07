@@ -5,7 +5,10 @@ from collections import Counter
 from pathlib import Path
 import sys
 
-import cv2
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
 
 try:
     from bot.negreanu_bot_V2.negreanu_bot_V2 import  BotNegreanu_V2 as BotNegreanuV2
@@ -63,6 +66,16 @@ POSITION_NAMES_BY_PLAYER_COUNT = {
     8: ["BTN", "SB", "BB", "UTG", "UTG+1", "MP", "HJ", "CO"],
     9: ["BTN", "SB", "BB", "UTG", "UTG+1", "MP", "LJ", "HJ", "CO"],
 }
+
+
+def _require_cv2():
+    if cv2 is None:
+        raise ModuleNotFoundError(
+            "No module named 'cv2'. Install it with "
+            "`python3 -m pip install opencv-python` or "
+            "`python3 -m pip install -r requirements.txt`."
+        )
+    return cv2
 
 
 def _build_negreanu_v2_lineup():
@@ -232,6 +245,7 @@ def build_performance_report(
 
 
 def save_adb_screenshot(img_full, save_screenshot_dir, saved_screenshot_count):
+    cv2_module = _require_cv2()
     if img_full is None:
         return saved_screenshot_count
 
@@ -239,7 +253,7 @@ def save_adb_screenshot(img_full, save_screenshot_dir, saved_screenshot_count):
     file_name = f"adb_{ts}_{saved_screenshot_count:06d}.png"
     file_path = str(Path(save_screenshot_dir) / file_name)
 
-    if cv2.imwrite(file_path, img_full):
+    if cv2_module.imwrite(file_path, img_full):
         saved_screenshot_count += 1
         print(f"Screenshot salvato: {file_path}")
     else:
@@ -258,6 +272,7 @@ def load_scraper_frame(
     saved_screenshot_count,
     count,
 ):
+    cv2_module = _require_cv2()
     screenshot_mode = getattr(screenshot_type, "name", str(screenshot_type))
 
     if screenshot_mode == "IMMAGE_SAVED":
@@ -283,7 +298,7 @@ def load_scraper_frame(
 
         count = (count + 1) % len(list_img)
         print(f"Processing image: {list_img[count]}")
-        img = cv2.imread(list_img[count])
+        img = cv2_module.imread(list_img[count])
         if img is None:
             print(f"Errore lettura immagine: {list_img[count]}")
             return {
@@ -294,7 +309,7 @@ def load_scraper_frame(
                 "skipped": True,
             }
 
-        img = cv2.resize(img, (0, 0), fx=display_scale, fy=display_scale)
+        img = cv2_module.resize(img, (0, 0), fx=display_scale, fy=display_scale)
         return {
             "img": img,
             "img_full": None,

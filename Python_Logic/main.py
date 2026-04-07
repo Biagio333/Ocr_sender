@@ -201,10 +201,18 @@ def _rect_tuple(rect: dict | None) -> tuple[int, int, int, int] | None:
     if not rect:
         return None
     try:
-        left = int(rect.get("left"))
-        top = int(rect.get("top"))
-        right = int(rect.get("right"))
-        bottom = int(rect.get("bottom"))
+        if all(key in rect for key in ("left", "top", "right", "bottom")):
+            left = int(rect.get("left"))
+            top = int(rect.get("top"))
+            right = int(rect.get("right"))
+            bottom = int(rect.get("bottom"))
+        elif all(key in rect for key in ("x", "y", "w", "h")):
+            left = int(rect.get("x"))
+            top = int(rect.get("y"))
+            right = left + int(rect.get("w"))
+            bottom = top + int(rect.get("h"))
+        else:
+            return None
     except (TypeError, ValueError):
         return None
     if right <= left or bottom <= top:
@@ -257,6 +265,12 @@ def _tap_point_signature(button: dict | None) -> tuple | None:
 def _click_point(button: dict | None) -> tuple[int, int] | None:
     if not button:
         return None
+    click_rect = _rect_tuple(button.get("click_rect"))
+    if click_rect is not None:
+        left, top, right, bottom = click_rect
+        if right > left and bottom > top:
+            return random.randint(left, right - 1), random.randint(top, bottom - 1)
+
     tap_rect = _expanded_ocr_tap_rect(button)
     if tap_rect is not None:
         left, top, right, bottom = tap_rect
@@ -460,6 +474,8 @@ class AdbAutoClicker:
         self._last_execution_consumed: bool = False
         self._last_meta_execution_key: tuple | None = None
         self._last_meta_attempt_at: float = 0.0
+        self._last_red_controls_key: tuple | None = None
+        self._stable_red_controls_frames: int = 0
 
     def _log(self, message: str) -> None:
         print(f"ADB autoclick | {message}")
@@ -482,6 +498,23 @@ class AdbAutoClicker:
     def _sleep_with_jitter(self, base_delay: float) -> None:
         jitter = random.uniform(0.0, self.tap_random_sec) if self.tap_random_sec > 0 else 0.0
         time.sleep(base_delay + jitter)
+
+    def _red_controls_key(self, table_state, hero_decision) -> tuple:
+        return (
+            getattr(table_state, "hands_number", None),
+            getattr(table_state, "street", None),
+            getattr(hero_decision, "action_kind", None),
+            getattr(hero_decision, "action_amount", None),
+            tuple(
+                str(button.get("label", "")).strip()
+                for button in (getattr(table_state, "available_actions", []) or [])
+            ),
+            tuple(
+                str(button.get("label", "")).strip()
+                for button in (getattr(table_state, "amount_buttons", []) or [])
+            ),
+            str(getattr(table_state, "amount_value_text", "") or "").strip(),
+        )
 
     def maybe_execute_meta_button(self, table_state) -> bool:
         buttons = list(getattr(table_state, "available_actions", []) or [])
@@ -539,6 +572,8 @@ class AdbAutoClicker:
             self._attempt_count = 0
             self._last_attempt_at = 0.0
             self._last_execution_consumed = False
+            self._last_red_controls_key = None
+            self._stable_red_controls_frames = 0
         elif self._last_execution_consumed:
             #self._log("skip: decision already executed")
             return
@@ -547,6 +582,21 @@ class AdbAutoClicker:
             return
         elif now - self._last_attempt_at < self.retry_delay_sec:
             self._log("skip: waiting retry delay")
+            return
+
+        red_controls_key = self._red_controls_key(table_state, hero_decision)
+        if red_controls_key != self._last_red_controls_key:
+            self._last_red_controls_key = red_controls_key
+            self._stable_red_controls_frames = 1
+        else:
+            self._stable_red_controls_frames += 1
+
+        if self._stable_red_controls_frames < 2:
+            self._log(
+                "wait: red controls confirmation "
+                f"{self._stable_red_controls_frames}/2 "
+                f"buttons={_button_labels(getattr(table_state, 'available_actions', []) or [])}"
+            )
             return
 
         action_point = _click_point(hero_decision.selected_action_button)

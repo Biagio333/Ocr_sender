@@ -700,6 +700,8 @@ class HeroBotBridge:
             or self._has_real_raise_panel(table)
             or red_action_area_visible
         )
+        if controls_visible and self._stable_controls_frames < 2:
+            return False
         if table.hero_to_act and red_action_area_visible and controls_visible:
             return True
         if not red_action_area_visible:

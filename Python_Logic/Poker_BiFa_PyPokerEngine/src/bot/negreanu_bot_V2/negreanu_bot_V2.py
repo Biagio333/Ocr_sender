@@ -686,6 +686,7 @@ def _is_open_raise_candidate(
     hi, lo, suited, pair, gap = _hole_features(cards)
     late = _is_late_position(position)
     early = _is_early_position(position)
+    broadway_count = sum(1 for rank in (hi, lo) if rank >= rank_to_index("T"))
 
     if pair:
         return True
@@ -703,7 +704,17 @@ def _is_open_raise_candidate(
         return True
     if late and suited and hi >= rank_to_index("T") and lo >= rank_to_index("7") and gap <= 2 and effective_stack_bb >= 16:
         return True
-    if late and strength >= 0.60 and players_in_hand <= 5:
+    if (
+        late
+        and strength >= 0.64
+        and players_in_hand <= 5
+        and (
+            suited
+            or hi == rank_to_index("A")
+            or broadway_count >= 2
+            or (broadway_count == 1 and lo >= rank_to_index("8") and gap <= 1)
+        )
+    ):
         return True
     return False
 
@@ -1029,7 +1040,7 @@ def classify_postflop(hole_cards, board_cards):
     second_pair = False
     weak_pair = False
 
-    if hole_pair_ranks and board_cards:
+    if hole_pair_ranks and board_cards and not trips and not full_house and not quads and not two_pair:
         best_hole_pair_rank = max(hole_pair_ranks)
         if best_hole_pair_rank == top_board:
             top_pair = True
@@ -1088,7 +1099,8 @@ def classify_postflop(hole_cards, board_cards):
             sorted(Counter(board_ranks).values(), reverse=True)[:2] == [3, 2]
         )
 
-    two_pair_with_hole = two_pair and not board_two_pair
+    board_pair_two_pair = board_pair and two_pair and not trips and not full_house and not quads
+    two_pair_with_hole = two_pair and not board_two_pair and not board_pair
     straight_with_hole = straight and not board_straight
     flush_with_hole = flush and not board_flush
     full_house_with_hole = full_house and not board_full_house
@@ -1106,6 +1118,7 @@ def classify_postflop(hole_cards, board_cards):
         "pair": pair,
         "two_pair": two_pair,
         "two_pair_with_hole": two_pair_with_hole,
+        "board_pair_two_pair": board_pair_two_pair,
         "trips": trips,
         "straight": straight,
         "straight_with_hole": straight_with_hole,
@@ -1163,6 +1176,8 @@ def _danger_board_factor(info: Dict[str, Any], players_in_hand: int) -> float:
         penalty += 0.12
     if info["board_pair"] and (info["top_pair"] or info["overpair"]):
         penalty += 0.04
+    if info.get("board_pair_two_pair", False):
+        penalty += 0.12
     if info["board_trips"] and (info["top_pair"] or info["overpair"]):
         penalty += 0.06
 
@@ -1175,6 +1190,7 @@ def _has_real_showdown_value(info: Dict[str, Any]) -> bool:
         info["second_pair"],
         info["weak_pair"],
         info["overpair"],
+        info.get("board_pair_two_pair", False),
         info["two_pair_with_hole"],
         info["trips_with_hole"],
         info["set_made"],
@@ -1198,6 +1214,8 @@ def postflop_strength(hole_cards, board_cards, cfg: negreanu_V2_BotConfig, playe
         score += 0.32 + (cfg.top_pair_bonus * info["kicker_strength"])
     if info["overpair"]:
         score += 0.42 + cfg.overpair_bonus
+    if info.get("board_pair_two_pair", False):
+        score += 0.28
     if info["two_pair_with_hole"]:
         score += 0.60
     if info["trips_with_hole"]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import random
 import re
 import sys
 from typing import Any
@@ -235,10 +236,50 @@ class _StreetState:
 
 
 class HeroBotBridge:
-    def __init__(self, bot_kind: str = "negreanu_v2", profile_name: str = "blind_stealer"):
+    def __init__(
+        self,
+        bot_kind: str = "negreanu_v2",
+        profile_name: str = "blind_stealer",
+        *,
+        rotation_enabled: bool = False,
+        rotation_profiles: list[str] | tuple[str, ...] | None = None,
+        rotation_hands_base: int = 10,
+        rotation_multiplier_min: int = 1,
+        rotation_multiplier_max: int = 3,
+        adaptive_profile_enabled: bool = False,
+        adaptive_profile_min_hands: int = 12,
+        adaptive_profile_min_opponents: int = 2,
+        adaptive_profile_switch_cooldown_hands: int = 8,
+    ):
         self.bot_kind = bot_kind
         self.profile_name = profile_name
         self.bot = self._create_bot(bot_kind, profile_name)
+        normalized_rotation_profiles = [
+            str(name or "").strip().lower()
+            for name in (rotation_profiles or [profile_name])
+            if str(name or "").strip()
+        ]
+        if self.profile_name not in normalized_rotation_profiles:
+            normalized_rotation_profiles.insert(0, self.profile_name)
+        self._rotation_enabled = bool(rotation_enabled) and len(normalized_rotation_profiles) > 1
+        self._rotation_profiles = list(dict.fromkeys(normalized_rotation_profiles))
+        self._rotation_hands_base = max(1, int(rotation_hands_base or 10))
+        self._rotation_multiplier_min = max(1, int(rotation_multiplier_min or 1))
+        self._rotation_multiplier_max = max(
+            self._rotation_multiplier_min,
+            int(rotation_multiplier_max or self._rotation_multiplier_min),
+        )
+        self._adaptive_profile_enabled = bool(adaptive_profile_enabled)
+        self._adaptive_profile_min_hands = max(1, int(adaptive_profile_min_hands or 12))
+        self._adaptive_profile_min_opponents = max(1, int(adaptive_profile_min_opponents or 2))
+        self._adaptive_profile_switch_cooldown_hands = max(
+            1,
+            int(adaptive_profile_switch_cooldown_hands or 8),
+        )
+        self._completed_hands_count = 0
+        self._next_profile_switch_after_hands = self._schedule_next_profile_switch_after_hands()
+        self._last_profile_switch_hand_count = 0
+        self._last_profile_switch_reason = "startup"
 
         self._active_hand_id: int | None = None
         self._active_players: list[int] = []
@@ -274,6 +315,160 @@ class HeroBotBridge:
         self._hero_committed_actions: dict[str, tuple[str, int | None]] = {}
         self._hero_committed_state_backup: dict[str, dict[str, Any]] = {}
 
+    def _schedule_next_profile_switch_after_hands(self) -> int | None:
+        if not self._rotation_enabled:
+            return None
+        multiplier = random.randint(
+            self._rotation_multiplier_min,
+            self._rotation_multiplier_max,
+        )
+        return self._completed_hands_count + (self._rotation_hands_base * multiplier)
+
+    def _rotate_profile_if_needed(self) -> None:
+        if self._adaptive_profile_enabled:
+            return
+        if not self._rotation_enabled or self._next_profile_switch_after_hands is None:
+            return
+        if self._completed_hands_count < self._next_profile_switch_after_hands:
+            return
+
+        candidates = [
+            profile_name
+            for profile_name in self._rotation_profiles
+            if profile_name != self.profile_name
+        ]
+        if not candidates:
+            self._next_profile_switch_after_hands = self._schedule_next_profile_switch_after_hands()
+            return
+
+        next_profile = random.choice(candidates)
+        old_profile = self.profile_name
+        self.flush()
+        self.profile_name = next_profile
+        self.bot = self._create_bot(self.bot_kind, self.profile_name)
+        self._last_profile_switch_hand_count = self._completed_hands_count
+        self._last_profile_switch_reason = "random_rotation"
+        self._next_profile_switch_after_hands = self._schedule_next_profile_switch_after_hands()
+        next_switch_text = (
+            str(self._next_profile_switch_after_hands)
+            if self._next_profile_switch_after_hands is not None else "-"
+        )
+        print(
+            "Hero bot profile rotation | "
+            f"{old_profile} -> {next_profile} "
+            f"after completed_hands={self._completed_hands_count} "
+            f"next_switch_at={next_switch_text}"
+        )
+
+    def _adaptive_profile_candidates(self) -> set[str]:
+        return set(self._rotation_profiles) if self._rotation_profiles else {self.profile_name}
+
+    def _safe_float(self, value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _collect_adaptive_opponent_stats(self, table: TableBase) -> list[dict[str, Any]]:
+        active_seats = set(self._detect_active_players(table))
+        stats_rows: list[dict[str, Any]] = []
+        for seat in sorted(active_seats):
+            if seat == HERO_SEAT:
+                continue
+            tracker = self._resolve_tracker(table, seat)
+            snapshot = tracker.build_stats().to_dict()
+            snapshot["seat"] = seat
+            stats_rows.append(snapshot)
+        return stats_rows
+
+    def _pick_adaptive_profile(self, table: TableBase) -> tuple[str, str]:
+        allowed_profiles = self._adaptive_profile_candidates()
+        opponent_stats = self._collect_adaptive_opponent_stats(table)
+        qualified = [
+            row for row in opponent_stats
+            if int(row.get("hands_played", 0) or 0) >= self._adaptive_profile_min_hands
+        ]
+        if len(qualified) < self._adaptive_profile_min_opponents:
+            return "live_exploiter", (
+                f"insufficient_sample qualified={len(qualified)} "
+                f"min={self._adaptive_profile_min_opponents}"
+            )
+
+        def avg_stat(key: str, default: float = 0.0) -> float:
+            values = [self._safe_float(row.get(key), default) for row in qualified]
+            return sum(values) / len(values) if values else default
+
+        avg_vpip = avg_stat("vpip", 0.28)
+        avg_pfr = avg_stat("pfr", 0.18)
+        avg_af = avg_stat("af", 1.5)
+        avg_fold_to_raise = avg_stat("fold_to_raise", 0.35)
+        avg_fold_to_cbet = avg_stat("fold_to_cbet", 0.35)
+        avg_wtsd = avg_stat("wtsd", 0.30)
+        avg_three_bet = avg_stat("3bet", 0.10)
+
+        target_profile = "live_exploiter"
+        reason = (
+            f"qualified={len(qualified)} avg_vpip={avg_vpip:.2f} avg_pfr={avg_pfr:.2f} "
+            f"avg_af={avg_af:.2f} avg_3bet={avg_three_bet:.2f} "
+            f"avg_f2r={avg_fold_to_raise:.2f} avg_f2cbet={avg_fold_to_cbet:.2f} avg_wtsd={avg_wtsd:.2f}"
+        )
+        if (
+            "balanced_reg" in allowed_profiles
+            and (
+                avg_three_bet >= 0.14
+                or avg_pfr >= 0.23
+                or avg_af >= 2.2
+            )
+        ):
+            target_profile = "balanced_reg"
+            reason = f"aggro_table {reason}"
+        elif (
+            "sticky_postflop" in allowed_profiles
+            and (
+                avg_vpip >= 0.34
+                and avg_wtsd >= 0.33
+                and avg_fold_to_cbet <= 0.34
+            )
+        ):
+            target_profile = "sticky_postflop"
+            reason = f"sticky_callers {reason}"
+        elif "live_exploiter" in allowed_profiles:
+            target_profile = "live_exploiter"
+            reason = f"default_exploit {reason}"
+
+        return target_profile, reason
+
+    def _switch_profile(self, next_profile: str, reason: str) -> None:
+        old_profile = self.profile_name
+        if next_profile == old_profile:
+            self._last_profile_switch_reason = reason
+            return
+        self.flush()
+        self.profile_name = next_profile
+        self.bot = self._create_bot(self.bot_kind, self.profile_name)
+        self._last_profile_switch_hand_count = self._completed_hands_count
+        self._last_profile_switch_reason = reason
+        print(
+            "Hero bot adaptive profile | "
+            f"{old_profile} -> {next_profile} "
+            f"at completed_hands={self._completed_hands_count} "
+            f"reason={reason}"
+        )
+
+    def _adapt_profile_if_needed(self, table: TableBase) -> None:
+        if not self._adaptive_profile_enabled:
+            return
+        if (
+            self._completed_hands_count - self._last_profile_switch_hand_count
+            < self._adaptive_profile_switch_cooldown_hands
+        ):
+            return
+
+        target_profile, reason = self._pick_adaptive_profile(table)
+        if target_profile not in self._adaptive_profile_candidates():
+            return
+        self._switch_profile(target_profile, reason)
+
     def process_table(self, table: TableBase) -> HeroBotDecision | None:
         if table.hands_number <= 0:
             return None
@@ -281,7 +476,11 @@ class HeroBotBridge:
 
         state_changed = self._state_changed
         if self._active_hand_id != table.hands_number:
-            self._finalize_hand()
+            if self._active_hand_id is not None:
+                self._completed_hands_count += 1
+                self._finalize_hand()
+                self._rotate_profile_if_needed()
+            self._adapt_profile_if_needed(table)
             self._start_hand(table)
             state_changed = True
         elif table.street != self._last_seen_street:
@@ -812,23 +1011,44 @@ class HeroBotBridge:
             stacks[player.player_index] = self._player_stack(table, player.player_index)
         hole_cards[HERO_SEAT] = [card.get("name", "") for card in table.hero_cards]
 
-        current_max_bet = max((self._player_bet(table, seat) for seat in self._active_players), default=0)
         hero_bet = self._player_bet(table, HERO_SEAT)
+        visible_action_kinds = {
+            str(button.get("action_kind", "")).strip().lower()
+            for button in self._hero_available_actions
+        }
+        visible_action_kinds.discard("")
         visible_call_amount = self._visible_call_amount_units(table)
-        call_amount = visible_call_amount if visible_call_amount is not None else max(0, current_max_bet - hero_bet)
+        if visible_call_amount is None and "check" in visible_action_kinds and "call" not in visible_action_kinds:
+            visible_call_amount = 0
+
+        if visible_call_amount is not None:
+            current_max_bet = hero_bet + max(0, visible_call_amount)
+        else:
+            current_max_bet = max((self._player_bet(table, seat) for seat in self._active_players), default=0)
+        call_amount = max(0, visible_call_amount if visible_call_amount is not None else current_max_bet - hero_bet)
         street_state = self._street_state(table.street)
         bb_amount = self._bb_amount_units(table)
         min_raise_increment = street_state.last_raise_size or bb_amount
         min_raise_to = current_max_bet + min_raise_increment
         max_raise_to = hero_bet + stacks[HERO_SEAT]
         visible_amount_value = _extract_amount_units(table.amount_value_text or "", self._money_scale)
+        if visible_amount_value is None:
+            for button in self._hero_available_actions:
+                if str(button.get("action_kind", "")).strip().lower() != "raise":
+                    continue
+                visible_amount_value = _extract_amount_units(str(button.get("raw_label", "")).strip(), self._money_scale)
+                if visible_amount_value is not None and visible_amount_value > 0:
+                    break
 
         if visible_amount_value is not None and visible_amount_value > 0:
             min_raise_to = visible_amount_value
-        elif visible_call_amount is not None:
+        elif "raise" in visible_action_kinds and visible_call_amount is not None:
             min_raise_to = hero_bet + visible_call_amount + bb_amount
 
-        if max_raise_to <= current_max_bet:
+        if "raise" not in visible_action_kinds:
+            min_raise_to = 0
+            max_raise_to = 0
+        elif max_raise_to <= current_max_bet:
             min_raise_to = 0
             max_raise_to = 0
         else:
@@ -1151,6 +1371,35 @@ class HeroBotBridge:
             status.append("BB")
         return " ".join(status)
 
+    def get_player_hands_played(self, table: TableBase, seat: int) -> int:
+        tracker = self._resolve_tracker(table, seat)
+        snapshot = tracker.build_stats().to_dict()
+        return int(snapshot.get("hands_played", 0) or 0)
+
+    def get_player_style_text(self, table: TableBase, seat: int) -> str:
+        tracker = self._resolve_tracker(table, seat)
+        snapshot = tracker.build_stats().to_dict()
+        hands_played = int(snapshot.get("hands_played", 0) or 0)
+        if hands_played < 8:
+            return "unknown"
+
+        vpip = self._safe_float(snapshot.get("vpip"), 0.28)
+        pfr = self._safe_float(snapshot.get("pfr"), 0.18)
+        af = self._safe_float(snapshot.get("af"), 1.5)
+        wtsd = self._safe_float(snapshot.get("wtsd"), 0.30)
+
+        if vpip >= 0.34 and pfr <= 0.18 and af <= 1.8:
+            return "loose-passive"
+        if vpip >= 0.28 and (pfr >= 0.22 or af >= 2.3):
+            return "lag"
+        if vpip <= 0.22 and pfr >= 0.16:
+            return "tag"
+        if vpip <= 0.18 and pfr <= 0.14:
+            return "nit"
+        if wtsd >= 0.36 and af <= 1.7:
+            return "station"
+        return "balanced"
+
     def get_acting_seat(self, hero_decision: HeroBotDecision | None = None) -> int | None:
         if hero_decision is not None or self._pending_hero_turn or self._hero_buttons_visible:
             return HERO_SEAT
@@ -1164,6 +1413,20 @@ class HeroBotBridge:
 
     def get_amount_value_text(self) -> str:
         return self._hero_amount_value_text
+
+    def get_bot_name(self) -> str:
+        return str(getattr(self.bot, "name", "") or self.profile_name or "").strip()
+
+    def get_completed_hands_count(self) -> int:
+        return int(self._completed_hands_count)
+
+    def get_next_profile_switch_after_hands(self) -> int | None:
+        if self._adaptive_profile_enabled:
+            return None
+        return self._next_profile_switch_after_hands
+
+    def get_last_profile_switch_reason(self) -> str:
+        return str(self._last_profile_switch_reason or "").strip()
 
     def invalidate_hero_decision(self, hand_id: int, street: str) -> None:
         if hand_id != self._active_hand_id:

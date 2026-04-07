@@ -16,6 +16,7 @@ from config import (
     ADB_MAX_RETRIES,
     ADB_RETRY_DELAY_SEC,
     ADB_TAP_RANDOM_SEC,
+    ANALYSIS_DB_PATH,
     ADB_TAP_DELAY_SEC,
     DATA_SOURCE,
     ENABLE_ADB_AUTOCLICK,
@@ -24,6 +25,15 @@ from config import (
     ENABLE_HERO_BOT,
     HERO_BOT_KIND,
     HERO_BOT_PROFILE,
+    HERO_BOT_PROFILE_ROTATION_ENABLED,
+    HERO_BOT_PROFILE_ROTATION_HANDS_BASE,
+    HERO_BOT_PROFILE_ROTATION_MULTIPLIER_MAX,
+    HERO_BOT_PROFILE_ROTATION_MULTIPLIER_MIN,
+    HERO_BOT_PROFILE_ROTATION_PROFILES,
+    HERO_BOT_ADAPTIVE_PROFILE_ENABLED,
+    HERO_BOT_ADAPTIVE_PROFILE_MIN_HANDS,
+    HERO_BOT_ADAPTIVE_PROFILE_MIN_OPPONENTS,
+    HERO_BOT_ADAPTIVE_PROFILE_SWITCH_COOLDOWN_HANDS,
     ENABLE_TABLE_VIEWER,
     PACKET_SAVE_DIR,
     REPLAY_INPUT_PATH,
@@ -150,6 +160,14 @@ def _hero_hand_label(table_state) -> str:
         suit_counts[suit] = suit_counts.get(suit, 0) + 1
 
     counts = sorted(rank_counts.values(), reverse=True)
+    board_rank_counts: dict[str, int] = {}
+    for card in table_state.board_cards:
+        parsed = _parse_card_name(str(card.get("name", "")))
+        if parsed is None:
+            continue
+        board_rank = parsed[0]
+        board_rank_counts[board_rank] = board_rank_counts.get(board_rank, 0) + 1
+    board_is_paired = any(count >= 2 for count in board_rank_counts.values())
     flush = any(count >= 5 for count in suit_counts.values())
     straight = _is_straight(ranks)
 
@@ -166,6 +184,8 @@ def _hero_hand_label(table_state) -> str:
     if counts and counts[0] == 3:
         return "tris"
     if len(counts) >= 2 and counts[0] == 2 and counts[1] == 2:
+        if board_is_paired:
+            return "coppia su board"
         return "doppia coppia"
     if counts and counts[0] == 2:
         return "coppia"
@@ -396,6 +416,33 @@ def _force_any_live_action_button(table_state) -> dict | None:
     return None
 
 
+def _refresh_live_hero_decision(table_state, hero_decision, current_available_actions) -> tuple[object | None, str | None]:
+    if hero_decision is None:
+        return None, None
+
+    live_action_button = _find_live_action_button(table_state, hero_decision)
+    if live_action_button is None:
+        forced_button = _force_any_live_action_button(table_state)
+        if forced_button is None:
+            return None, (
+                "ADB autoclick | skip stale decision: "
+                f"wanted={hero_decision.action_kind} "
+                f"buttons={_button_labels(current_available_actions)}"
+            )
+        print(
+            "ADB autoclick | force visible action: "
+            f"wanted={hero_decision.action_kind} "
+            f"forced={forced_button.get('label', '')}"
+        )
+        live_action_button = forced_button
+
+    hero_decision.selected_action_button = live_action_button
+    live_amount_button = _find_live_amount_button(table_state, hero_decision)
+    if live_amount_button is not None:
+        hero_decision.selected_amount_button = live_amount_button
+    return hero_decision, None
+
+
 def _is_meta_control_label(text: str) -> bool:
     label = _normalized_button_label(text)
     if not label:
@@ -476,6 +523,9 @@ class AdbAutoClicker:
         self._last_meta_attempt_at: float = 0.0
         self._last_red_controls_key: tuple | None = None
         self._stable_red_controls_frames: int = 0
+        self._retry_delay_skip_key: tuple | None = None
+        self._retry_delay_skip_count: int = 0
+        self._force_recalc_after_retry_skips: int = 3
 
     def _log(self, message: str) -> None:
         print(f"ADB autoclick | {message}")
@@ -559,7 +609,7 @@ class AdbAutoClicker:
         self._last_meta_attempt_at = time.monotonic()
         return True
 
-    def maybe_execute(self, table_state, hero_decision) -> None:
+    def maybe_execute(self, table_state, hero_decision, *, force: bool = False) -> str:
         execution_key = (
             hero_decision.hand_id,
             hero_decision.street,
@@ -574,15 +624,31 @@ class AdbAutoClicker:
             self._last_execution_consumed = False
             self._last_red_controls_key = None
             self._stable_red_controls_frames = 0
+            self._retry_delay_skip_key = execution_key
+            self._retry_delay_skip_count = 0
         elif self._last_execution_consumed:
             #self._log("skip: decision already executed")
-            return
+            return "consumed"
         elif self._attempt_count >= self.max_retries:
             self._log("skip: max retries reached")
-            return
-        elif now - self._last_attempt_at < self.retry_delay_sec:
+            return "max_retries"
+        elif not force and now - self._last_attempt_at < self.retry_delay_sec:
+            if execution_key != self._retry_delay_skip_key:
+                self._retry_delay_skip_key = execution_key
+                self._retry_delay_skip_count = 0
+            self._retry_delay_skip_count += 1
+            if self._retry_delay_skip_count >= self._force_recalc_after_retry_skips:
+                self._log(
+                    "force recalculation after repeated retry delay "
+                    f"count={self._retry_delay_skip_count}"
+                )
+                self._retry_delay_skip_count = 0
+                return "force_recalc"
             self._log("skip: waiting retry delay")
-            return
+            return "retry_delay"
+        else:
+            self._retry_delay_skip_key = execution_key
+            self._retry_delay_skip_count = 0
 
         red_controls_key = self._red_controls_key(table_state, hero_decision)
         if red_controls_key != self._last_red_controls_key:
@@ -597,7 +663,7 @@ class AdbAutoClicker:
                 f"{self._stable_red_controls_frames}/2 "
                 f"buttons={_button_labels(getattr(table_state, 'available_actions', []) or [])}"
             )
-            return
+            return "wait_red_confirmation"
 
         action_point = _click_point(hero_decision.selected_action_button)
         amount_point = _click_point(hero_decision.selected_amount_button)
@@ -608,16 +674,16 @@ class AdbAutoClicker:
                     f"skip: no action target for {hero_decision.action_kind} "
                     f"button={hero_decision.selected_action_button and hero_decision.selected_action_button.get('label')}"
                 )
-                return
+                return "no_action_target"
             self._log(f"execute {hero_decision.action_kind} target={action_point}")
             self._tap(*action_point)
             self._attempt_count += 1
             self._last_attempt_at = time.monotonic()
-            return
+            return "executed"
 
         if hero_decision.action_kind != "raise":
             self._log(f"skip: unsupported action {hero_decision.action_kind}")
-            return
+            return "unsupported_action"
 
         current_amount = _extract_first_int(getattr(table_state, "amount_value_text", "") or "")
         money_scale = max(1, int(getattr(hero_decision, "money_scale", 1) or 1))
@@ -668,12 +734,13 @@ class AdbAutoClicker:
         final_point = action_point or amount_point
         if final_point is None:
             self._log("skip: no final tap target for raise")
-            return
+            return "no_final_target"
         self._sleep_with_jitter(self.tap_delay_sec)
         self._log(f"final raise tap target={final_point}")
         self._tap(*final_point)
         self._attempt_count += 1
         self._last_attempt_at = time.monotonic()
+        return "executed"
 
 
 def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
@@ -685,6 +752,8 @@ def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
         ("Cards", 7),
         ("Hand", 14),
         ("Actions", 31),
+        ("Style", 13),
+        ("Hands", 5),
         ("Status", 14),
     )
 
@@ -708,6 +777,20 @@ def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
     print(f"Actions avail: {_button_labels(hero_bot.get_available_actions())}")
     print(f"Amount btns  : {_button_labels(hero_bot.get_amount_buttons())}")
     print(f"Amount value : {hero_bot.get_amount_value_text() or '-'}")
+    print(f"Bot profile  : {hero_bot.get_bot_name() or '-'}")
+    next_switch_at = hero_bot.get_next_profile_switch_after_hands()
+    completed_hands = hero_bot.get_completed_hands_count()
+    remaining_switch_hands = (
+        max(0, next_switch_at - completed_hands)
+        if next_switch_at is not None else None
+    )
+    print(
+        "Profile rot. : "
+        f"hands={completed_hands} "
+        f"next={next_switch_at if next_switch_at is not None else '-'} "
+        f"remaining={remaining_switch_hands if remaining_switch_hands is not None else '-'}"
+    )
+    print(f"Profile why  : {hero_bot.get_last_profile_switch_reason() or '-'}")
     print(separator)
     print(
         row(
@@ -724,6 +807,8 @@ def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
         cards = _card_names(table_state.hero_cards) if player.player_index == 0 else "-"
         hand_label = _hero_hand_label(table_state) if player.player_index == 0 else "-"
         actions = hero_bot.get_player_street_actions_text(player.player_index)
+        style = hero_bot.get_player_style_text(table_state, player.player_index)
+        hands_played = str(hero_bot.get_player_hands_played(table_state, player.player_index))
         status = hero_bot.get_player_status_text(
             player.player_index,
             acting_seat=hero_bot.get_acting_seat(hero_decision),
@@ -737,7 +822,9 @@ def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
                 f"{_clip(cards, columns[4][1]):<{columns[4][1]}}",
                 f"{_clip(hand_label, columns[5][1]):<{columns[5][1]}}",
                 f"{_clip(actions, columns[6][1]):<{columns[6][1]}}",
-                f"{_clip(status, columns[7][1]):<{columns[7][1]}}",
+                f"{_clip(style, columns[7][1]):<{columns[7][1]}}",
+                f"{hands_played:>{columns[8][1]}}",
+                f"{_clip(status, columns[9][1]):<{columns[9][1]}}",
             ]
         )
         if player.player_index == 0:
@@ -859,7 +946,19 @@ def main():
     adb_auto_clicker = None
     last_hero_decision = None
     if ENABLE_HERO_BOT:
-        hero_bot = HeroBotBridge(bot_kind=HERO_BOT_KIND, profile_name=HERO_BOT_PROFILE)
+        hero_bot = HeroBotBridge(
+            bot_kind=HERO_BOT_KIND,
+            profile_name=HERO_BOT_PROFILE,
+            rotation_enabled=HERO_BOT_PROFILE_ROTATION_ENABLED,
+            rotation_profiles=HERO_BOT_PROFILE_ROTATION_PROFILES,
+            rotation_hands_base=HERO_BOT_PROFILE_ROTATION_HANDS_BASE,
+            rotation_multiplier_min=HERO_BOT_PROFILE_ROTATION_MULTIPLIER_MIN,
+            rotation_multiplier_max=HERO_BOT_PROFILE_ROTATION_MULTIPLIER_MAX,
+            adaptive_profile_enabled=HERO_BOT_ADAPTIVE_PROFILE_ENABLED,
+            adaptive_profile_min_hands=HERO_BOT_ADAPTIVE_PROFILE_MIN_HANDS,
+            adaptive_profile_min_opponents=HERO_BOT_ADAPTIVE_PROFILE_MIN_OPPONENTS,
+            adaptive_profile_switch_cooldown_hands=HERO_BOT_ADAPTIVE_PROFILE_SWITCH_COOLDOWN_HANDS,
+        )
     if ENABLE_ADB_AUTOCLICK and DATA_SOURCE == "socket":
         adb_auto_clicker = AdbAutoClicker(
             device_serial=ADB_DEVICE_SERIAL,
@@ -873,8 +972,8 @@ def main():
     if DATA_SOURCE == "socket" and SAVE_INCOMING_PACKETS:
         packet_store = PacketStore(PACKET_SAVE_DIR)
     if ENABLE_HERO_BOT:
-        hero_decision_store = HeroDecisionStore(PACKET_SAVE_DIR)
-        hand_history_store = HandHistoryStore(PACKET_SAVE_DIR)
+        hero_decision_store = HeroDecisionStore(ANALYSIS_DB_PATH)
+        hand_history_store = HandHistoryStore(ANALYSIS_DB_PATH)
 
     index = 0
     try:
@@ -999,35 +1098,52 @@ def main():
                         last_hero_decision = None
                         continue
 
-                    live_action_button = _find_live_action_button(table_state, last_hero_decision)
-                    if live_action_button is None:
-                        forced_button = _force_any_live_action_button(table_state)
-                        if forced_button is not None:
+                    current_decision = last_hero_decision
+                    last_hero_decision, stale_reason = _refresh_live_hero_decision(
+                        table_state,
+                        current_decision,
+                        current_available_actions,
+                    )
+                    if last_hero_decision is None:
+                        if stale_reason:
+                            print(stale_reason)
+                        hero_bot.invalidate_hero_decision(
+                            current_decision.hand_id,
+                            current_decision.street,
+                        )
+                        last_hero_decision = None
+                        continue
+                    try:
+                        execute_status = adb_auto_clicker.maybe_execute(table_state, last_hero_decision)
+                        if execute_status == "force_recalc":
                             print(
-                                "ADB autoclick | force visible action: "
-                                f"wanted={last_hero_decision.action_kind} "
-                                f"forced={forced_button.get('label', '')}"
-                            )
-                            live_action_button = forced_button
-                        else:
-                            print(
-                                "ADB autoclick | skip stale decision: "
-                                f"wanted={last_hero_decision.action_kind} "
-                                f"buttons={_button_labels(current_available_actions)}"
+                                "ADB autoclick | force bot recalculation after repeated retry delay: "
+                                f"hand={last_hero_decision.hand_id} "
+                                f"street={last_hero_decision.street} "
+                                f"action={last_hero_decision.action_kind}"
                             )
                             hero_bot.invalidate_hero_decision(
                                 last_hero_decision.hand_id,
                                 last_hero_decision.street,
                             )
-                            last_hero_decision = None
-                            continue
-
-                    last_hero_decision.selected_action_button = live_action_button
-                    live_amount_button = _find_live_amount_button(table_state, last_hero_decision)
-                    if live_amount_button is not None:
-                        last_hero_decision.selected_amount_button = live_amount_button
-                    try:
-                        adb_auto_clicker.maybe_execute(table_state, last_hero_decision)
+                            refreshed_decision = hero_bot.process_table(table_state)
+                            if refreshed_decision is None:
+                                last_hero_decision = None
+                                continue
+                            last_hero_decision, stale_reason = _refresh_live_hero_decision(
+                                table_state,
+                                refreshed_decision,
+                                current_available_actions,
+                            )
+                            if last_hero_decision is None:
+                                if stale_reason:
+                                    print(stale_reason)
+                                continue
+                            adb_auto_clicker.maybe_execute(
+                                table_state,
+                                last_hero_decision,
+                                force=True,
+                            )
                     except Exception as exc:
                         print(f"ADB autoclick error: {exc}")
 

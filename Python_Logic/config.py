@@ -5,10 +5,11 @@ BASE_DIR = Path(__file__).resolve().parent
 
 # Modalita disponibili: "socket" oppure "replay"
 DATA_SOURCE = "socket"
-IS_TOURNEI = False
+IS_TOURNEI = False 
 # Salvataggio pacchetti ricevuti in live
 SAVE_INCOMING_PACKETS = True
 PACKET_SAVE_DIR = BASE_DIR / "packets_tourney.db"
+ANALYSIS_DB_PATH = BASE_DIR / "analysis_tourney.db"
 
 # Config sorgente live socket
 SOCKET_HOST = "127.0.0.1"
@@ -29,7 +30,20 @@ ENABLE_HERO_BOT = True
 HERO_BOT_KIND = "negreanu_v2"
 
 #HERO_BOT_PROFILE = "blind_stealer"
-HERO_BOT_PROFILE = "live_exploiter"
+HERO_BOT_PROFILE = "balanced_reg"
+HERO_BOT_PROFILE_ROTATION_ENABLED = False
+HERO_BOT_PROFILE_ROTATION_PROFILES = [
+    "live_exploiter",
+    "balanced_reg",
+    "sticky_postflop",
+]
+HERO_BOT_PROFILE_ROTATION_HANDS_BASE = 10
+HERO_BOT_PROFILE_ROTATION_MULTIPLIER_MIN = 1
+HERO_BOT_PROFILE_ROTATION_MULTIPLIER_MAX = 3
+HERO_BOT_ADAPTIVE_PROFILE_ENABLED = False
+HERO_BOT_ADAPTIVE_PROFILE_MIN_HANDS = 12
+HERO_BOT_ADAPTIVE_PROFILE_MIN_OPPONENTS = 2
+HERO_BOT_ADAPTIVE_PROFILE_SWITCH_COOLDOWN_HANDS = 8
 
 # Auto click ADB
 ENABLE_ADB_AUTOCLICK = True

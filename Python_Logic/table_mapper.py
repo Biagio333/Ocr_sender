@@ -3,6 +3,8 @@ from difflib import SequenceMatcher
 from payload_utils import get_players, get_table
 from table_models import PlayerBase, TableBase, infer_street, parse_amount_from_text
 
+PREFLOP_NAME_UPDATE_FRAMES = 3
+
 
 def names_are_similar(name_a: str, name_b: str, threshold: float = 0.90) -> bool:
     left = (name_a or "").strip().lower()
@@ -21,6 +23,7 @@ class TableStateMapper:
         self._previous_hands_number: int | None = None
         self._previous_street = "unknown"
         self._previous_max_bet = 0.0
+        self._name_update_frames_remaining = 0
         
 
     def build_table(self, payload: dict) -> TableBase:
@@ -34,6 +37,8 @@ class TableStateMapper:
 
         self.table.board_cards = list(table_data.get("board_cards", []) or [])
         self.table.hero_cards = list(table_data.get("hero_cards", []) or [])
+        if 0 < len(self.table.hero_cards) < 2 and len(self._previous_hero_cards) == 2:
+            self.table.hero_cards = list(self._previous_hero_cards)
         self.table.available_actions = list(table_data.get("available_actions", []) or [])
         self.table.amount_buttons = list(table_data.get("amount_buttons", []) or [])
         self.table.amount_value_text = table_data.get("amount_value_text", "") or ""
@@ -46,13 +51,24 @@ class TableStateMapper:
         )
         self.table.street = infer_street(self.table.board_cards)
         self.table.raw = payload
+        is_new_hand = (
+            self.table.street == "preflop"
+            and self.table.hero_cards != self._previous_hero_cards
+            and len(self.table.hero_cards) == 2
+        )
+        if is_new_hand:
+            self._name_update_frames_remaining = PREFLOP_NAME_UPDATE_FRAMES
+        allow_name_update = (
+            self.table.street == "preflop"
+            and self._name_update_frames_remaining > 0
+        )
 
         
         seen_indexes: set[int] = set()
         for player_data in get_players(payload):
             player_index = player_data.get("player_index", -1)
             player = self.table.get_or_create_player(player_index)
-            player.update_from_packet(player_data)
+            player.update_from_packet(player_data, allow_name_update=allow_name_update)
             seen_indexes.add(player_index)
 
         hero_has_cards = len(self.table.hero_cards) == 2
@@ -67,18 +83,24 @@ class TableStateMapper:
 
         #calcolo pot amount 
         #new hand hands_number
-        if self.table.street == "preflop" and self.table.hero_cards != self._previous_hero_cards and len(self.table.hero_cards) == 2:
+        if is_new_hand:
             self.table.hands_number += 1
             self.table.street_pot_amount.clear()  #nuova mano resetto pot street
 
         if self.table.street == "preflop" :
             if len(self.table.street_pot_amount) == 0:
                 self.table.street_pot_amount.append(0.0)  #inizializzo pot street preflop se non presente
+            if self._name_update_frames_remaining > 0:
+                self._name_update_frames_remaining -= 1
+        else:
+            self._name_update_frames_remaining = 0
 
         # Se il capture/replay parte a mano gia iniziata, inizializza comunque
         # un hand id sintetico per permettere al bridge hero di lavorare.
         if self.table.hands_number <= 0 and len(self.table.hero_cards) == 2:
             self.table.hands_number = 1
+            if self.table.street == "preflop" and self._name_update_frames_remaining <= 0:
+                self._name_update_frames_remaining = max(0, PREFLOP_NAME_UPDATE_FRAMES - 1)
 
 
         try:

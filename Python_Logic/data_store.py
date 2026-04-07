@@ -236,7 +236,12 @@ class HandHistoryStore:
                     first_payload_timestamp = COALESCE(hand_history.first_payload_timestamp, excluded.first_payload_timestamp),
                     last_payload_timestamp = COALESCE(excluded.last_payload_timestamp, hand_history.last_payload_timestamp),
                     street = CASE
-                        WHEN excluded.street IS NOT NULL AND excluded.street != '' THEN excluded.street
+                        WHEN excluded.street IS NULL OR excluded.street = '' THEN hand_history.street
+                        WHEN hand_history.street IS NULL OR hand_history.street = '' THEN excluded.street
+                        WHEN excluded.street = 'river' THEN excluded.street
+                        WHEN excluded.street = 'turn' AND hand_history.street IN ('preflop', 'flop', 'unknown') THEN excluded.street
+                        WHEN excluded.street = 'flop' AND hand_history.street IN ('preflop', 'unknown') THEN excluded.street
+                        WHEN excluded.street = 'preflop' AND hand_history.street = 'unknown' THEN excluded.street
                         ELSE hand_history.street
                     END,
                     hero_position = CASE

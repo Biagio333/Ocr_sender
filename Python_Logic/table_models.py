@@ -274,7 +274,7 @@ class PlayerBase:
 
     
 
-    def update_from_packet(self, player_data: dict):
+    def update_from_packet(self, player_data: dict, *, allow_name_update: bool = True):
 
         name = player_data.get("name", "") or ""
     
@@ -287,7 +287,7 @@ class PlayerBase:
             set_new_name = False
             self.inferred_action = n[1:] if n.startswith("o") else n
 
-        if set_new_name:  
+        if set_new_name and allow_name_update:
             self.name_stabilizer.update(n)
             if self.name_stabilizer.current is not None:
                 if not names_are_similar(self.name_stabilizer.current, self.name, 0.9):
@@ -298,6 +298,8 @@ class PlayerBase:
                     self.name = self.name_stabilizer.current
                 else:
                     self.inferred_action = "waiting"
+        elif set_new_name:
+            self.inferred_action = "waiting"
 
         self.stack_text = player_data.get("stack", "") or ""
         self.bet_text = player_data.get("bet", "") or ""

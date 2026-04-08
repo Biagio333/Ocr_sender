@@ -125,6 +125,11 @@ def _fmt_amount(value: float) -> str:
     return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
+def _hand_tag(table_state) -> str:
+    hand_id = getattr(table_state, "hands_number", 0) or 0
+    return f"[hand {hand_id}]"
+
+
 def _parse_card_name(card_name: str) -> tuple[str, str] | None:
     text = (card_name or "").strip().upper()
     if len(text) < 2:
@@ -783,9 +788,10 @@ def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
     def row(cells):
         return "|" + "|".join(f" {cell} " for cell in cells) + "|"
 
+    hand_tag = _hand_tag(table_state)
     print()
     print(f"{ACCENT}{'=' * len(separator)}{RESET}")
-    print("SITUAZIONE DOPO L'AZIONE")
+    print(f"{hand_tag} SITUAZIONE DOPO L'AZIONE")
     print(f"Hand         : {table_state.hands_number}")
     print(f"Street       : {table_state.street}")
     print(f"Board        : {_card_names(table_state.board_cards)}")
@@ -855,7 +861,7 @@ def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
 
     print(separator)
     print("-" * 80)
-    print("Action log")
+    print(f"{hand_tag} Action log")
     action_log = hero_bot.get_action_log()
     if not action_log:
         print("  - nessuna azione ancora")
@@ -873,14 +879,25 @@ def _print_hero_bot_snapshot(table_state, hero_decision, hero_bot) -> None:
     print(f"{ACCENT}{'=' * len(separator)}{RESET}")
 
 
-def _save_hero_decision_snapshot(decision_store, payload, table_state, hero_decision) -> None:
+def _build_analysis_hand_id(session_hand_base: int, hand_id: int) -> int:
+    return int(session_hand_base + max(0, int(hand_id or 0)))
+
+
+def _save_hero_decision_snapshot(
+    decision_store,
+    payload,
+    table_state,
+    hero_decision,
+    *,
+    session_hand_base: int = 0,
+) -> None:
     if decision_store is None or hero_decision is None:
         return
 
     raw_table = ((getattr(table_state, "raw", {}) or {}).get("table", {}) or {})
     row = {
         "payload_timestamp": payload.get("timestamp"),
-        "hand_id": hero_decision.hand_id,
+        "hand_id": _build_analysis_hand_id(session_hand_base, hero_decision.hand_id),
         "street": hero_decision.street,
         "position": hero_decision.position,
         "hero_cards": json.dumps(list(getattr(table_state, "hero_cards", []) or []), ensure_ascii=False),
@@ -924,7 +941,14 @@ def _hero_decision_signature(hero_decision) -> tuple:
     )
 
 
-def _save_hand_history_snapshot(hand_store, payload, table_state, hero_decision=None) -> None:
+def _save_hand_history_snapshot(
+    hand_store,
+    payload,
+    table_state,
+    hero_decision=None,
+    *,
+    session_hand_base: int = 0,
+) -> None:
     if hand_store is None:
         return
 
@@ -943,7 +967,7 @@ def _save_hand_history_snapshot(hand_store, payload, table_state, hero_decision=
 
     hero_player = table_state.get_player(0) if hasattr(table_state, "get_player") else None
     row = {
-        "hand_id": hand_id,
+        "hand_id": _build_analysis_hand_id(session_hand_base, hand_id),
         "first_payload_timestamp": payload.get("timestamp"),
         "last_payload_timestamp": payload.get("timestamp"),
         "street": getattr(table_state, "street", ""),
@@ -988,6 +1012,7 @@ def main():
     last_saved_hero_decision_signature = None
     previous_logged_hero_cards: tuple[str, ...] = ()
     previous_logged_board_cards: tuple[str, ...] = ()
+    analysis_session_hand_base = int(time.time() * 1_000_000)
     if ENABLE_HERO_BOT:
         hero_bot = HeroBotBridge(
             bot_kind=HERO_BOT_KIND,
@@ -1066,7 +1091,12 @@ def main():
                 saved_path = packet_store.save_payload(payload)
                 #print(f"Pacchetto salvato in: {saved_path}")
 
-            _save_hand_history_snapshot(hand_history_store, payload, table_state)
+            _save_hand_history_snapshot(
+                hand_history_store,
+                payload,
+                table_state,
+                session_hand_base=analysis_session_hand_base,
+            )
 
             
             if ENABLE_BUTTON_DEBUG_LOGS:
@@ -1084,7 +1114,7 @@ def main():
             red_action_area_avg_red = (((getattr(table_state, "raw", {}) or {}).get("table", {}) or {}).get("red_action_area_avg_red", 0.0))
             if has_red_action_area:
                 print(
-                    f"{RED}pulsanti OCR con rosso: "
+                    f"{RED}{_hand_tag(table_state)} pulsanti OCR con rosso: "
                     f"avgRed={red_action_area_avg_red} "
                     f"buttons={_button_labels(current_available_actions)}{RESET}"
                 )
@@ -1109,9 +1139,21 @@ def main():
                     last_hero_decision = hero_decision
                     decision_signature = _hero_decision_signature(hero_decision)
                     if decision_signature != last_saved_hero_decision_signature:
-                        _save_hero_decision_snapshot(hero_decision_store, payload, table_state, hero_decision)
+                        _save_hero_decision_snapshot(
+                            hero_decision_store,
+                            payload,
+                            table_state,
+                            hero_decision,
+                            session_hand_base=analysis_session_hand_base,
+                        )
                         last_saved_hero_decision_signature = decision_signature
-                    _save_hand_history_snapshot(hand_history_store, payload, table_state, hero_decision)
+                    _save_hand_history_snapshot(
+                        hand_history_store,
+                        payload,
+                        table_state,
+                        hero_decision,
+                        session_hand_base=analysis_session_hand_base,
+                    )
                     _print_hero_bot_snapshot(table_state, hero_decision, hero_bot)
                 elif last_hero_decision is not None:
                     if (

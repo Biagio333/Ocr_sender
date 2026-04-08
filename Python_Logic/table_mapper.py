@@ -24,7 +24,20 @@ class TableStateMapper:
         self._previous_street = "unknown"
         self._previous_max_bet = 0.0
         self._name_update_frames_remaining = 0
-        
+
+    def _should_reuse_previous_hero_cards(
+        self,
+        current_hero_cards: list[dict],
+        current_street: str,
+    ) -> bool:
+        # During an active postflop hand OCR can briefly miss one hole card.
+        # Avoid carrying cards across the preflop boundary, or a new hand can
+        # inherit the previous hand's cards and break hand detection.
+        return (
+            0 < len(current_hero_cards) < 2
+            and len(self._previous_hero_cards) == 2
+            and current_street != "preflop"
+        )
 
     def build_table(self, payload: dict) -> TableBase:
         self._save_previous_state()
@@ -36,8 +49,9 @@ class TableStateMapper:
         #self.table.pot_amount = parse_amount_from_text(table_data.get("pot", ""), prefer="last")
 
         self.table.board_cards = list(table_data.get("board_cards", []) or [])
+        self.table.street = infer_street(self.table.board_cards)
         self.table.hero_cards = list(table_data.get("hero_cards", []) or [])
-        if 0 < len(self.table.hero_cards) < 2 and len(self._previous_hero_cards) == 2:
+        if self._should_reuse_previous_hero_cards(self.table.hero_cards, self.table.street):
             self.table.hero_cards = list(self._previous_hero_cards)
         self.table.available_actions = list(table_data.get("available_actions", []) or [])
         self.table.amount_buttons = list(table_data.get("amount_buttons", []) or [])
@@ -49,12 +63,15 @@ class TableStateMapper:
             or self.table.amount_buttons
             or self.table.amount_value_text
         )
-        self.table.street = infer_street(self.table.board_cards)
         self.table.raw = payload
         is_new_hand = (
             self.table.street == "preflop"
-            and self.table.hero_cards != self._previous_hero_cards
             and len(self.table.hero_cards) == 2
+            and (
+                self._previous_street != "preflop"
+                or self.table.hero_cards != self._previous_hero_cards
+                or len(self._previous_hero_cards) != 2
+            )
         )
         if is_new_hand:
             self._name_update_frames_remaining = PREFLOP_NAME_UPDATE_FRAMES

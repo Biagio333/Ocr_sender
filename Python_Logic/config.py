@@ -35,7 +35,7 @@ OLLAMA_MODEL = "qwen3:8b"
 OLLAMA_TIMEOUT_SEC = 8.0
 
 #HERO_BOT_PROFILE = "blind_stealer"
-HERO_BOT_PROFILE = "sticky_postflop"
+HERO_BOT_PROFILE = "live_exploiter"
 HERO_BOT_PROFILE_ROTATION_ENABLED = False
 HERO_BOT_PROFILE_ROTATION_PROFILES = [
     "live_exploiter",

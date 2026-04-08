@@ -55,6 +55,27 @@ def _normalize_control_label(label: str) -> str:
     return "".join(ch for ch in (label or "").strip().lower() if ch.isalnum())
 
 
+def _looks_like_non_action_panel(buttons: list[dict[str, Any]] | None) -> bool:
+    labels = [
+        _normalize_control_label(str((button or {}).get("label", "")))
+        for button in (buttons or [])
+    ]
+    labels = [label for label in labels if label]
+    if not labels:
+        return False
+
+    non_action_markers = (
+        "haivinto",
+        "mostracarte",
+        "nonmostrare",
+        "conferma",
+        "showcards",
+        "show",
+        "winner",
+    )
+    return any(any(marker in label for marker in non_action_markers) for label in labels)
+
+
 def _sanitize_action_button_label(label: str) -> str:
     text = str(label or "").strip()
     text = re.sub(r"\b\d{1,2}:\d{2}\b", " ", text)
@@ -588,6 +609,9 @@ class HeroBotBridge:
             selected_action_button,
             selected_amount_button,
         )
+        source_street_state = self._street_state(table.street)
+        source_action_player = source_street_state.last_action_player
+        source_action_kind = source_street_state.last_action_kind or None
         self._last_decision_key = decision_key
         self._last_emitted_recommendation = recommendation_key
         self._last_turn_decision_key = turn_decision_key
@@ -606,8 +630,8 @@ class HeroBotBridge:
             max_raise_to=state.max_completion_betting_or_raising_to_amount,
             money_scale=self._money_scale,
             position=self._positions_map.get(HERO_SEAT, ""),
-            source_action_player=self._street_state(table.street).last_action_player,
-            source_action_kind=self._street_state(table.street).last_action_kind or None,
+            source_action_player=source_action_player,
+            source_action_kind=source_action_kind,
             selected_action_button=selected_action_button,
             selected_amount_button=selected_amount_button,
             debug_lines=debug_lines,
@@ -923,11 +947,7 @@ class HeroBotBridge:
         if not self._positions_map:
             return False
         red_action_area_visible = self._has_red_action_area(table)
-        controls_visible = (
-            bool(self._hero_available_actions)
-            or self._has_real_raise_panel(table)
-            or red_action_area_visible
-        )
+        controls_visible = bool(self._hero_available_actions) or self._has_real_raise_panel(table)
         if controls_visible and self._stable_controls_frames < 2:
             return False
         if table.hero_to_act and red_action_area_visible and controls_visible:
@@ -1692,6 +1712,14 @@ class HeroBotBridge:
         self._hero_raw_available_actions = list(table.available_actions)
         self._hero_raw_amount_buttons = list(table.amount_buttons)
         self._hero_amount_value_text = table.amount_value_text or ""
+
+        if _looks_like_non_action_panel(self._hero_raw_available_actions):
+            self._hero_available_actions = []
+            self._hero_amount_buttons = []
+            self._hero_buttons_visible = False
+            self._pending_hero_turn = False
+            return changed
+
         self._hero_available_actions = self._clean_available_actions(table)
         self._hero_amount_buttons = self._clean_amount_buttons(table)
         self._hero_buttons_visible = bool(table.buttons_visible or table.hero_to_act)
@@ -1821,6 +1849,8 @@ class HeroBotBridge:
         return visible_buttons[0]
 
     def _coerce_action_to_visible_controls(self, action, state: LivePokerState):
+        if state.checking_or_calling_amount <= 0 and action.kind == "fold":
+            return type(action)(kind="check", amount=None)
         available_kinds = {
             str(button.get("action_kind", "")).strip().lower()
             for button in self._hero_available_actions

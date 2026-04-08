@@ -2098,6 +2098,56 @@ class SmartParametricBot:
                     self._record_stats_decision(action, stats_context)
                     return action
 
+                if (
+                    call_amount > 0
+                    and raise_count == 0
+                    and call_ratio <= 0.03
+                    and _is_late_position(position)
+                    and (
+                        pair
+                        or (hi == rank_to_index("A") and lo >= rank_to_index("4"))
+                        or (hi >= rank_to_index("K") and lo >= rank_to_index("8"))
+                        or (hi >= rank_to_index("Q") and lo >= rank_to_index("9"))
+                        or (hi >= rank_to_index("J") and lo >= rank_to_index("9") and gap <= 1)
+                        or (suited and hi >= rank_to_index("9") and lo >= rank_to_index("6") and gap <= 3)
+                        or (suited and hi >= rank_to_index("8") and lo >= rank_to_index("5") and gap <= 2)
+                    )
+                ):
+                    if strength >= max(raise_threshold - 0.08, 0.54):
+                        amount = self._raise_amount(
+                            state,
+                            stack,
+                            max(strength, 0.60),
+                            "preflop",
+                            stats_context,
+                        )
+                        if amount is not None:
+                            action = BotAction("raise", amount)
+                            self._record_stats_decision(action, stats_context)
+                            return action
+
+                    action = BotAction("call", call_amount)
+                    self._record_stats_decision(action, stats_context)
+                    return action
+
+                if (
+                    call_amount > 0
+                    and call_ratio <= 0.03
+                    and not _is_early_position(position)
+                    and (
+                        pair
+                        or (hi == rank_to_index("A") and suited)
+                        or (hi == rank_to_index("A") and lo >= rank_to_index("7"))
+                        or (suited and hi >= rank_to_index("K") and lo >= rank_to_index("6"))
+                        or (suited and hi >= rank_to_index("Q") and lo >= rank_to_index("8") and gap <= 3)
+                        or (hi >= rank_to_index("J") and lo >= rank_to_index("T") and gap <= 1)
+                        or (suited and gap <= 2 and hi >= rank_to_index("7") and lo >= rank_to_index("5"))
+                    )
+                ):
+                    action = BotAction("call", call_amount)
+                    self._record_stats_decision(action, stats_context)
+                    return action
+
                 action = self._passive_action(call_amount) if call_amount == 0 else BotAction("fold")
                 self._record_stats_decision(action, stats_context)
                 return action

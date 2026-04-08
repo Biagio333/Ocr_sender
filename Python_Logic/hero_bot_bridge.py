@@ -17,8 +17,10 @@ if str(POKER_ENGINE_SRC) not in sys.path:
 from bot.bot_biagio.bot_biagio import BotBiagio, build_stats_context as build_biagio_stats_context
 from bot.negreanu_bot.negreanu_bot import BotNegreanu, build_stats_context as build_negreanu_stats_context
 from bot.negreanu_bot_V2.negreanu_bot_V2 import BotNegreanu_V2, build_stats_context as build_negreanu_v2_stats_context
+from bot.ollama_bot.ollama_bot import BotOllama
 from player_stats import PlayerStatsTracker
 from utils.utils import build_positions_map
+from config import OLLAMA_MODEL, OLLAMA_TIMEOUT_SEC, OLLAMA_URL
 
 
 HERO_SEAT = 0
@@ -616,6 +618,13 @@ class HeroBotBridge:
             return BotBiagio()
         if bot_kind == "negreanu_v1":
             return BotNegreanu(profile_name=profile_name)
+        if bot_kind == "ollama":
+            return BotOllama(
+                model_name=OLLAMA_MODEL,
+                base_url=OLLAMA_URL,
+                timeout_sec=OLLAMA_TIMEOUT_SEC,
+                style_name=profile_name,
+            )
         return BotNegreanu_V2(profile_name=profile_name)
 
     def _start_hand(self, table: TableBase) -> None:
@@ -1182,6 +1191,8 @@ class HeroBotBridge:
         )
         context.update(
             {
+                "hero_name": self._stable_player_name(table, HERO_SEAT) or "hero",
+                "hero_seat": HERO_SEAT,
                 "available_actions": list(self._hero_available_actions),
                 "amount_buttons": list(self._hero_amount_buttons),
                 "amount_button_labels": [button.get("label", "") for button in self._hero_amount_buttons],
@@ -1189,6 +1200,8 @@ class HeroBotBridge:
                 "buttons_visible": self._hero_buttons_visible,
             }
         )
+        if isinstance(self.bot, BotOllama):
+            context["action_log"] = self.get_action_log(limit=24)
         return context
 
     def _build_decision_debug_lines(

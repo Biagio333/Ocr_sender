@@ -27,7 +27,12 @@ ENABLE_BUTTON_DEBUG_LOGS = False
 
 # Hero bot live bridge
 ENABLE_HERO_BOT = True
-HERO_BOT_KIND = "negreanu_v2"
+#HERO_BOT_KIND = "negreanu_v2"
+HERO_BOT_KIND = "ollama"
+
+OLLAMA_URL = "http://127.0.0.1:11434"
+OLLAMA_MODEL = "qwen3:8b"
+OLLAMA_TIMEOUT_SEC = 8.0
 
 #HERO_BOT_PROFILE = "blind_stealer"
 HERO_BOT_PROFILE = "balanced_reg"

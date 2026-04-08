@@ -8,15 +8,15 @@ DATA_SOURCE = "socket"
 IS_TOURNEI = False 
 # Salvataggio pacchetti ricevuti in live
 SAVE_INCOMING_PACKETS = True
-PACKET_SAVE_DIR = BASE_DIR / "packets_tourney.db"
-ANALYSIS_DB_PATH = BASE_DIR / "analysis_tourney.db"
+PACKET_SAVE_DIR = BASE_DIR / "packets_cash.db"
+ANALYSIS_DB_PATH = BASE_DIR / "analysis_cash.db"
 
 # Config sorgente live socket
 SOCKET_HOST = "127.0.0.1"
 SOCKET_PORT = 5000
 
 # Config replay: file singolo oppure cartella con tanti .json
-REPLAY_INPUT_PATH = BASE_DIR / "packets_tourney.db"
+REPLAY_INPUT_PATH = BASE_DIR / "packets_cash.db"
 
 
 

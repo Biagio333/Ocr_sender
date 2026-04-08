@@ -884,6 +884,25 @@ def _save_hero_decision_snapshot(decision_store, payload, table_state, hero_deci
     decision_store.save_decision(row)
 
 
+def _hero_decision_signature(hero_decision) -> tuple:
+    return (
+        getattr(hero_decision, "hand_id", None),
+        getattr(hero_decision, "street", None),
+        getattr(hero_decision, "position", None),
+        getattr(hero_decision, "action_kind", None),
+        getattr(hero_decision, "action_amount", None),
+        getattr(hero_decision, "hero_stack", None),
+        getattr(hero_decision, "hero_bet", None),
+        getattr(hero_decision, "call_amount", None),
+        getattr(hero_decision, "min_raise_to", None),
+        getattr(hero_decision, "max_raise_to", None),
+        getattr(hero_decision, "source_action_player", None),
+        getattr(hero_decision, "source_action_kind", None),
+        json.dumps(getattr(hero_decision, "selected_action_button", None), ensure_ascii=False, sort_keys=True),
+        json.dumps(getattr(hero_decision, "selected_amount_button", None), ensure_ascii=False, sort_keys=True),
+    )
+
+
 def _save_hand_history_snapshot(hand_store, payload, table_state, hero_decision=None) -> None:
     if hand_store is None:
         return
@@ -945,6 +964,7 @@ def main():
     hero_bot = None
     adb_auto_clicker = None
     last_hero_decision = None
+    last_saved_hero_decision_signature = None
     if ENABLE_HERO_BOT:
         hero_bot = HeroBotBridge(
             bot_kind=HERO_BOT_KIND,
@@ -1059,7 +1079,10 @@ def main():
                 hero_decision = hero_bot.process_table(table_state)
                 if hero_decision is not None:
                     last_hero_decision = hero_decision
-                    _save_hero_decision_snapshot(hero_decision_store, payload, table_state, hero_decision)
+                    decision_signature = _hero_decision_signature(hero_decision)
+                    if decision_signature != last_saved_hero_decision_signature:
+                        _save_hero_decision_snapshot(hero_decision_store, payload, table_state, hero_decision)
+                        last_saved_hero_decision_signature = decision_signature
                     _save_hand_history_snapshot(hand_history_store, payload, table_state, hero_decision)
                     _print_hero_bot_snapshot(table_state, hero_decision, hero_bot)
                 elif last_hero_decision is not None:
@@ -1068,6 +1091,7 @@ def main():
                         or last_hero_decision.street != table_state.street
                     ):
                         last_hero_decision = None
+                        last_saved_hero_decision_signature = None
                     elif not (
                         table_state.hero_to_act
                         or getattr(table_state, "available_actions", [])
@@ -1075,6 +1099,7 @@ def main():
                         or getattr(table_state, "amount_value_text", "")
                     ):
                         last_hero_decision = None
+                        last_saved_hero_decision_signature = None
 
                 if adb_auto_clicker is not None and has_red_action_area and last_hero_decision is not None:
                     current_action_kinds = {

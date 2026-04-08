@@ -206,10 +206,6 @@ def parse_amount_with_action(text: str, prefer: str = "last") -> tuple[float, st
 
     amounts = extract_amount_candidates(text)
 
-    if len(amounts) > 1 :
-        if text [0] in ["P","p"]:
-            return -amounts[0] , ""
-
     if not amounts:
         return 0.0, ""
     if prefer == "first":

@@ -419,6 +419,15 @@ def _effective_opponent_profile(opponents: List[Dict[str, Any]]) -> Dict[str, fl
     }
 
 
+def _count_unknown_opponents(opponents: List[Dict[str, Any]], min_hands: int = 8) -> int:
+    count = 0
+    for opp in opponents:
+        hands_played = _safe_int(opp.get("hands_played", 0), 0)
+        if hands_played < min_hands:
+            count += 1
+    return count
+
+
 def _opponents_in_positions(opponents: List[Dict[str, Any]], positions: Set[str]) -> List[Dict[str, Any]]:
     pos_set = {_norm_pos(p) for p in positions}
     return [
@@ -687,16 +696,28 @@ def _is_open_raise_candidate(
     late = _is_late_position(position)
     early = _is_early_position(position)
     broadway_count = sum(1 for rank in (hi, lo) if rank >= rank_to_index("T"))
+    button = _norm_pos(position) == "BTN"
+    cutoff = _norm_pos(position) == "CO"
 
     if pair:
         return True
     if hi == rank_to_index("A"):
         if suited:
             return not early or lo >= rank_to_index("4")
+        if button:
+            return lo >= rank_to_index("2")
+        if cutoff:
+            return lo >= rank_to_index("5")
         return lo >= rank_to_index("9") or (late and lo >= rank_to_index("7"))
     if hi >= rank_to_index("K") and lo >= rank_to_index("T"):
         return True
     if hi >= rank_to_index("Q") and lo >= rank_to_index("J"):
+        return True
+    if button and suited and hi >= rank_to_index("J") and lo >= rank_to_index("7") and gap <= 3:
+        return True
+    if button and hi >= rank_to_index("J") and lo >= rank_to_index("7") and gap <= 1:
+        return True
+    if cutoff and suited and hi >= rank_to_index("J") and lo >= rank_to_index("7") and gap <= 2:
         return True
     if suited and gap <= 1 and hi >= rank_to_index("8") and not early and effective_stack_bb >= 18:
         return True
@@ -747,17 +768,24 @@ def _is_flat_call_candidate(
     strength: float,
 ) -> bool:
     hi, lo, suited, pair, gap = _hole_features(cards)
+    button = _norm_pos(position) == "BTN"
     if pair:
         if hi >= rank_to_index("2") and not _is_early_position(position):
             return True
         return hi >= rank_to_index("4")
     if hi == rank_to_index("A"):
         if suited:
+            if button:
+                return lo >= rank_to_index("2")
+            return lo >= rank_to_index("5")
+        if button:
             return lo >= rank_to_index("5")
         return lo >= rank_to_index("9")
     if hi >= rank_to_index("K") and lo >= rank_to_index("Q"):
         return True
     if hi >= rank_to_index("Q") and lo >= rank_to_index("J"):
+        return True
+    if button and suited and hi >= rank_to_index("J") and lo >= rank_to_index("7") and gap <= 3:
         return True
     if hi >= rank_to_index("J") and lo >= rank_to_index("T") and gap <= 1:
         return True
@@ -1399,6 +1427,7 @@ class SmartParametricBot:
         short_stacks = _count_short_stacks(opponents, 15.0)
         big_stacks = _count_big_stacks(opponents, 45.0)
         weak_limpers = _count_weak_limpers(opponents)
+        unknown_opponents = _count_unknown_opponents(opponents)
         blind_defenders = _opponents_in_positions(opponents, {"SB", "BB"})
         avg_blind_fold = _avg_stat(blind_defenders, "fold_to_raise", 0.35)
         avg_blind_three_bet = _avg_stat(blind_defenders, "3bet", 0.10)
@@ -1442,6 +1471,15 @@ class SmartParametricBot:
 
         if players_yet_to_act >= 3 and not _is_late_position(position):
             strength -= 0.02
+
+        if unknown_opponents > 0:
+            strength -= 0.03
+            if _is_open_spot(stats_context) and _is_late_position(position):
+                strength -= 0.03
+            if not _is_open_spot(stats_context):
+                strength -= 0.02
+            if unknown_opponents >= 2:
+                strength -= 0.02
 
         if hero_stack_bb >= 40 and short_stacks >= 1 and _is_late_position(position):
             strength += self.config.big_stack_bully_bonus
@@ -1575,6 +1613,7 @@ class SmartParametricBot:
         avg_blind_three_bet = _avg_stat(blind_defenders, "3bet", 0.10)
         avg_blind_vpip = _avg_stat(blind_defenders, "vpip", 0.28)
         weak_limpers = _count_weak_limpers(opponents)
+        unknown_opponents = _count_unknown_opponents(opponents)
 
         if _is_late_position(position) and raise_count == 0:
             raise_threshold -= 0.06
@@ -1612,6 +1651,17 @@ class SmartParametricBot:
             raise_threshold += 0.05
             call_threshold += 0.06
 
+        if unknown_opponents > 0:
+            raise_threshold += 0.04
+            call_threshold += 0.03
+            if _is_open_spot(stats_context) and _is_late_position(position):
+                raise_threshold += 0.03
+            if raise_count > 0:
+                call_threshold += 0.03
+            if unknown_opponents >= 2:
+                raise_threshold += 0.02
+                call_threshold += 0.02
+
         return _clamp(raise_threshold, 0.40, 0.90), _clamp(call_threshold, 0.25, 0.78)
 
     def _postflop_thresholds(
@@ -1633,6 +1683,7 @@ class SmartParametricBot:
         last_action_kind = _norm_text(stats_context.get("last_action_kind", ""))
         last_action_street = _norm_text(stats_context.get("last_action_street", ""))
         last_actor_stats = stats_context.get("last_actor_stats", None)
+        unknown_opponents = _count_unknown_opponents(opponents)
 
         if profile["avg_fold_to_cbet"] > 0.48:
             raise_threshold -= 0.04
@@ -1668,6 +1719,15 @@ class SmartParametricBot:
         elif street == "river":
             raise_threshold += 0.08
             call_threshold += 0.10
+
+        if unknown_opponents > 0:
+            raise_threshold += 0.04
+            call_threshold += 0.03
+            if not hero_has_initiative:
+                call_threshold += 0.02
+            if unknown_opponents >= 2:
+                raise_threshold += 0.02
+                call_threshold += 0.02
 
         return _clamp(raise_threshold, 0.48, 0.90), _clamp(call_threshold, 0.28, 0.84)
 

@@ -111,7 +111,7 @@ class TableStateMapper:
         except IndexError:
             pass
         #calcolo il pot amount come somma dei bet dei player 
-        self.table.pot_amount = sum(self.table.street_pot_amount)
+        self.table.pot_amount = max(0.0, sum(self.table.street_pot_amount))
 
         #resetto se cambio street o nuova partita
         if self.table.street != self._previous_street  and self.table.street != "preflop":

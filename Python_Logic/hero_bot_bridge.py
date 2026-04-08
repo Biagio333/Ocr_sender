@@ -139,20 +139,40 @@ def _button_height(button: dict[str, Any]) -> int:
     return max(0, bottom - top)
 
 
-def _estimate_shortcut_value(label: str, *, pot_amount: int, min_raise_to: int, max_raise_to: int, bb_amount: int, scale: int) -> int | None:
+def _estimate_shortcut_value(
+    label: str,
+    *,
+    pot_amount: int,
+    min_raise_to: int,
+    max_raise_to: int,
+    bb_amount: int,
+    hero_bet: int,
+    call_amount: int,
+    scale: int,
+) -> int | None:
     normalized = _normalize_control_label(label)
     if not normalized:
         return None
+
+    def raise_to_from_pot_fraction(fraction: float) -> int | None:
+        if pot_amount <= 0:
+            return None
+        if call_amount <= 0:
+            return max(1, int(round(pot_amount * fraction)))
+        pot_after_call = pot_amount + call_amount
+        raise_to = hero_bet + call_amount + int(round(pot_after_call * fraction))
+        return max(1, raise_to)
+
     if "max" in normalized:
         return max_raise_to if max_raise_to > 0 else None
     if "min" in normalized:
         return min_raise_to if min_raise_to > 0 else None
     if "piatto" in normalized or "pot" in normalized:
-        return pot_amount if pot_amount > 0 else None
+        return raise_to_from_pot_fraction(1.0)
     if "50" in normalized:
-        return max(1, int(round(pot_amount * 0.5))) if pot_amount > 0 else None
+        return raise_to_from_pot_fraction(0.5)
     if "75" in normalized:
-        return max(1, int(round(pot_amount * 0.75))) if pot_amount > 0 else None
+        return raise_to_from_pot_fraction(0.75)
     if "3bb" in normalized:
         return 3 * bb_amount if bb_amount > 0 else None
     value = _extract_amount_units(label, scale)
@@ -2032,6 +2052,8 @@ class HeroBotBridge:
                     min_raise_to=min_raise_to,
                     max_raise_to=max_raise_to,
                     bb_amount=bb_amount,
+                    hero_bet=hero_bet,
+                    call_amount=visible_call_amount or 0,
                     scale=self._money_scale,
                 )
                 cleaned_button["label"] = cleaned_button["raw_label"] or "preset"

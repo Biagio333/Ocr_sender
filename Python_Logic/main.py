@@ -98,6 +98,27 @@ def _card_names(cards: list[dict]) -> str:
     return " ".join(names) if names else "-"
 
 
+def _card_change_signature(cards: list[dict]) -> tuple[str, ...]:
+    return tuple(str(card.get("name", "")).upper() for card in cards if card.get("name"))
+
+
+def _log_cards_if_changed(
+    table_state,
+    previous_hero_cards: tuple[str, ...],
+    previous_board_cards: tuple[str, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    current_hero_cards = _card_change_signature(getattr(table_state, "hero_cards", []) or [])
+    current_board_cards = _card_change_signature(getattr(table_state, "board_cards", []) or [])
+
+    if current_hero_cards != previous_hero_cards:
+        print(f"Hero cards   : {' '.join(current_hero_cards) if current_hero_cards else '-'}")
+
+    if current_board_cards != previous_board_cards:
+        print(f"Board cards  : {' '.join(current_board_cards) if current_board_cards else '-'}")
+
+    return current_hero_cards, current_board_cards
+
+
 def _fmt_amount(value: float) -> str:
     if value == int(value):
         return str(int(value))
@@ -965,6 +986,8 @@ def main():
     adb_auto_clicker = None
     last_hero_decision = None
     last_saved_hero_decision_signature = None
+    previous_logged_hero_cards: tuple[str, ...] = ()
+    previous_logged_board_cards: tuple[str, ...] = ()
     if ENABLE_HERO_BOT:
         hero_bot = HeroBotBridge(
             bot_kind=HERO_BOT_KIND,
@@ -1011,6 +1034,11 @@ def main():
 
             index += 1
             table_state = table_mapper.build_table(payload)
+            previous_logged_hero_cards, previous_logged_board_cards = _log_cards_if_changed(
+                table_state,
+                previous_logged_hero_cards,
+                previous_logged_board_cards,
+            )
 
             #---------------------------------------------------
             #-- aspetto inizio mano per fare giocare il boot ---

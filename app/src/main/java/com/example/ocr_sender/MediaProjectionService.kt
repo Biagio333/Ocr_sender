@@ -76,8 +76,10 @@ class MediaProjectionService : Service() {
         var pendingCount: Int = 0,
         var missingCount: Int = 0
     )
-    private val loadedTemplatesBoard = mutableListOf<OpenCVTemplate>()
-    private val loadedTemplatesHero = mutableListOf<OpenCVTemplate>()
+    private val loadedRankTemplatesBoard = mutableListOf<OpenCVTemplate>()
+    private val loadedRankTemplatesHero = mutableListOf<OpenCVTemplate>()
+    private val loadedSuitTemplatesBoard = mutableListOf<OpenCVTemplate>()
+    private val loadedSuitTemplatesHero = mutableListOf<OpenCVTemplate>()
     private var coveredCardTemplate: OpenCVTemplate? = null
     private var dealerButtonTemplate: OpenCVTemplate? = null
     private val heroCardStates = mutableMapOf<String, HeroCardStabilityState>()
@@ -139,10 +141,15 @@ class MediaProjectionService : Service() {
         )
 
         // Soglie OpenCV Match Template (TM_SQDIFF_NORMED: 0.0 = match perfetto)
-        private const val OPENCV_MATCH_THRESHOLD = 0.06
+        private const val SYMBOL_MATCH_THRESHOLD = 0.35
         private const val COVERED_CARD_MATCH_THRESHOLD = 0.12
         private const val DEALER_BUTTON_MATCH_THRESHOLD = 0.14
         private const val COVERED_CARD_MIN_DISTANCE_PX = 100
+        private const val CARD_BINARY_MAX_VALUE = 255.0
+        private const val SUIT_RED_PIXEL_RATIO_THRESHOLD = 0.08
+        private const val SUIT_RED_DOMINANCE_MIN = 35.0
+        private val RED_SUIT_NAMES = setOf("h", "d")
+        private val BLACK_SUIT_NAMES = setOf("s", "c")
         
         // Fattore di scala per le carte in mano (Hero)
         private const val HERO_CARD_SCALE_FACTOR = 1.16
@@ -172,17 +179,33 @@ class MediaProjectionService : Service() {
             val cardsPath = "$jsonName/cards_board"
             assets.list(cardsPath)?.forEach { fileName ->
                 if (fileName.endsWith(".png")) {
-                    val mat = loadGrayTemplate("$cardsPath/$fileName") ?: return@forEach
+                    val mat = loadBinaryTemplate("$cardsPath/$fileName") ?: return@forEach
                     
                     // Template per il board (scala 1:1)
-                    loadedTemplatesBoard.add(OpenCVTemplate(fileName.removeSuffix(".png"), mat.clone()))
+                    loadedRankTemplatesBoard.add(OpenCVTemplate(fileName.removeSuffix(".png"), mat.clone()))
                     
                     // Template per l'Hero (scalati)
                     val heroMat = Mat()
                     val newSize = Size(mat.cols() * HERO_CARD_SCALE_FACTOR, mat.rows() * HERO_CARD_SCALE_FACTOR)
                     Imgproc.resize(mat, heroMat, newSize, 0.0, 0.0, Imgproc.INTER_LINEAR)
-                    loadedTemplatesHero.add(OpenCVTemplate(fileName.removeSuffix(".png"), heroMat))
+                    loadedRankTemplatesHero.add(OpenCVTemplate(fileName.removeSuffix(".png"), heroMat))
                     
+                    mat.release()
+                }
+            }
+
+            val suitsPath = "$jsonName/semi"
+            assets.list(suitsPath)?.forEach { fileName ->
+                if (fileName.endsWith(".png")) {
+                    val mat = loadBinaryTemplate("$suitsPath/$fileName") ?: return@forEach
+
+                    loadedSuitTemplatesBoard.add(OpenCVTemplate(fileName.removeSuffix(".png"), mat.clone()))
+
+                    val heroMat = Mat()
+                    val newSize = Size(mat.cols() * HERO_CARD_SCALE_FACTOR, mat.rows() * HERO_CARD_SCALE_FACTOR)
+                    Imgproc.resize(mat, heroMat, newSize, 0.0, 0.0, Imgproc.INTER_LINEAR)
+                    loadedSuitTemplatesHero.add(OpenCVTemplate(fileName.removeSuffix(".png"), heroMat))
+
                     mat.release()
                 }
             }
@@ -194,7 +217,9 @@ class MediaProjectionService : Service() {
 
             Log.d(
                 TAG,
-                "Caricati ${loadedTemplatesBoard.size} template OpenCV (Board e Hero), covered=${coveredCardTemplate != null}, dealer=${dealerButtonTemplate != null}"
+                "Caricati rank board=${loadedRankTemplatesBoard.size}, rank hero=${loadedRankTemplatesHero.size}, " +
+                    "semi board=${loadedSuitTemplatesBoard.size}, semi hero=${loadedSuitTemplatesHero.size}, " +
+                    "covered=${coveredCardTemplate != null}, dealer=${dealerButtonTemplate != null}"
             )
         } catch (e: Exception) {
             Log.e(TAG, "Errore caricamento templates: ${e.message}")
@@ -207,6 +232,19 @@ class MediaProjectionService : Service() {
             val mat = Mat()
             Utils.bitmapToMat(raw, mat)
             Imgproc.cvtColor(mat, mat, Imgproc.COLOR_RGBA2GRAY)
+            mat
+        } finally {
+            raw.recycle()
+        }
+    }
+
+    private fun loadBinaryTemplate(assetPath: String): Mat? {
+        val raw = assets.open(assetPath).use { BitmapFactory.decodeStream(it) } ?: return null
+        return try {
+            val mat = Mat()
+            Utils.bitmapToMat(raw, mat)
+            Imgproc.cvtColor(mat, mat, Imgproc.COLOR_RGBA2GRAY)
+            Imgproc.threshold(mat, mat, 0.0, CARD_BINARY_MAX_VALUE, Imgproc.THRESH_BINARY_INV + Imgproc.THRESH_OTSU)
             mat
         } finally {
             raw.recycle()
@@ -341,7 +379,16 @@ class MediaProjectionService : Service() {
                         labelsBoard.forEachIndexed { idx, label ->
                             findRectByLabel(shapes, label, scaleX, scaleY)?.let { rect ->
                                 searchRects.add(rect)
-                                matchCardOpenCV(screen, rect, loadedTemplatesBoard)?.let { name ->
+                                val suitRect = findRectByLabel(shapes, "carte_tavolo_${idx + 1}_seme", scaleX, scaleY)
+                                suitRect?.let { searchRects.add(it) }
+                                val name = detectCardName(
+                                    screen = screen,
+                                    rankRect = rect,
+                                    rankTemplates = loadedRankTemplatesBoard,
+                                    suitRect = suitRect,
+                                    suitTemplates = loadedSuitTemplatesBoard
+                                )
+                                name?.let {
                                     pokerCards.add(PokerCard(idx, name, rect))
                                 }
                             }
@@ -352,9 +399,15 @@ class MediaProjectionService : Service() {
                         labelsHero.forEachIndexed { idx, label ->
                             findRectByLabel(shapes, label, scaleX, scaleY)?.let { rect ->
                                 searchRects.add(rect)
-                                val match = matchCardOpenCVDetailed(screen, rect, loadedTemplatesHero)
-                                val stableName = stabilizeHeroCard(label, match.acceptedName)
-                                logHeroCardMatch(label, rect, match, stableName)
+                                val suitRect = findRectByLabel(shapes, "carte_hero_${idx + 1}_seme", scaleX, scaleY)
+                                suitRect?.let { searchRects.add(it) }
+                                val rankMatch = matchCardOpenCVDetailed(screen, rect, loadedRankTemplatesHero)
+                                val suitMatch = suitRect?.let {
+                                    detectSuitDetailed(screen, it, loadedSuitTemplatesHero)
+                                }
+                                val detectedName = combineCardName(rankMatch.acceptedName, suitMatch?.acceptedName)
+                                val stableName = stabilizeHeroCard(label, detectedName)
+                                logHeroCardMatch(label, rect, suitRect, rankMatch, suitMatch, stableName)
                                 stableName?.let { name ->
                                     pokerCards.add(PokerCard(10 + idx, name, rect))
                                 }
@@ -456,6 +509,19 @@ class MediaProjectionService : Service() {
         val sourceMat = Mat()
         Utils.bitmapToMat(crop, sourceMat)
         Imgproc.cvtColor(sourceMat, sourceMat, Imgproc.COLOR_RGBA2GRAY)
+        crop.recycle()
+        return sourceMat to safe
+    }
+
+    private fun buildBinarySourceMat(screen: Bitmap, rect: Rect): Pair<Mat, Rect>? {
+        val safe = clampRectToBitmap(rect, screen) ?: return null
+        if (safe.width() < 10 || safe.height() < 10) return null
+
+        val crop = Bitmap.createBitmap(screen, safe.left, safe.top, safe.width(), safe.height())
+        val sourceMat = Mat()
+        Utils.bitmapToMat(crop, sourceMat)
+        Imgproc.cvtColor(sourceMat, sourceMat, Imgproc.COLOR_RGBA2GRAY)
+        Imgproc.threshold(sourceMat, sourceMat, 0.0, CARD_BINARY_MAX_VALUE, Imgproc.THRESH_BINARY_INV + Imgproc.THRESH_OTSU)
         crop.recycle()
         return sourceMat to safe
     }
@@ -577,8 +643,22 @@ class MediaProjectionService : Service() {
         }
     }
 
-    private fun matchCardOpenCV(screen: Bitmap, rect: Rect, templates: List<OpenCVTemplate>): String? {
-        return matchCardOpenCVDetailed(screen, rect, templates).acceptedName
+    private fun detectCardName(
+        screen: Bitmap,
+        rankRect: Rect,
+        rankTemplates: List<OpenCVTemplate>,
+        suitRect: Rect?,
+        suitTemplates: List<OpenCVTemplate>
+    ): String? {
+        val rankName = matchCardOpenCVDetailed(screen, rankRect, rankTemplates).acceptedName
+        val suitName = suitRect?.let { detectSuitDetailed(screen, it, suitTemplates).acceptedName }
+        return combineCardName(rankName, suitName)
+    }
+
+    private fun combineCardName(rankName: String?, suitName: String?): String? {
+        val rank = rankName?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
+        val suit = suitName?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
+        return rank + suit
     }
 
     private fun matchCardOpenCVDetailed(
@@ -586,7 +666,7 @@ class MediaProjectionService : Service() {
         rect: Rect,
         templates: List<OpenCVTemplate>
     ): CardMatchResult {
-        val source = buildGraySourceMat(screen, rect)
+        val source = buildBinarySourceMat(screen, rect)
             ?: return CardMatchResult(null, 1.0, emptyList())
         val (sourceMat, _) = source
 
@@ -594,21 +674,24 @@ class MediaProjectionService : Service() {
 
         for (t in templates) {
             if (t.mat.cols() > sourceMat.cols() || t.mat.rows() > sourceMat.rows()) continue
-            
+
             val result = Mat()
-            Imgproc.matchTemplate(sourceMat, t.mat, result, Imgproc.TM_SQDIFF_NORMED)
-            val mmr = Core.minMaxLoc(result)
-            matches.add(CardMatchCandidate(t.name, mmr.minVal))
-            result.release()
+            try {
+                Imgproc.matchTemplate(sourceMat, t.mat, result, Imgproc.TM_SQDIFF_NORMED)
+                val mmr = Core.minMaxLoc(result)
+                matches.add(CardMatchCandidate(t.name, mmr.minVal))
+            } finally {
+                result.release()
+            }
         }
         sourceMat.release()
 
         val topMatches = matches.sortedBy { it.score }.take(3)
         val bestMatch = topMatches.firstOrNull()
-        val acceptedName = bestMatch?.name?.takeIf { (bestMatch.score) < OPENCV_MATCH_THRESHOLD }
+        val acceptedName = bestMatch?.name?.takeIf { bestMatch.score < SYMBOL_MATCH_THRESHOLD }
 
         if (acceptedName != null) {
-            Log.d(TAG, "OpenCV TROVATA: $acceptedName (${bestMatch?.score})")
+            Log.d(TAG, "Template TROVATO: $acceptedName (${bestMatch?.score})")
         }
 
         return CardMatchResult(
@@ -616,6 +699,52 @@ class MediaProjectionService : Service() {
             bestScore = bestMatch?.score ?: 1.0,
             topMatches = topMatches
         )
+    }
+
+    private fun detectSuitDetailed(
+        screen: Bitmap,
+        rect: Rect,
+        templates: List<OpenCVTemplate>
+    ): CardMatchResult {
+        val preferredSuitNames = classifySuitColor(screen, rect)
+        val preferredTemplates = templates.filter { it.name in preferredSuitNames }
+        val match = matchCardOpenCVDetailed(screen, rect, preferredTemplates.ifEmpty { templates })
+        if (match.acceptedName != null) {
+            Log.d(TAG, "OpenCV suit TROVATA: ${match.acceptedName} (${match.bestScore}) expected=$preferredSuitNames")
+        }
+        return match
+    }
+
+    private fun classifySuitColor(screen: Bitmap, rect: Rect): Set<String> {
+        val safe = clampRectToBitmap(rect, screen) ?: return RED_SUIT_NAMES + BLACK_SUIT_NAMES
+        val crop = Bitmap.createBitmap(screen, safe.left, safe.top, safe.width(), safe.height())
+        val colorMat = Mat()
+        val rgbMat = Mat()
+        return try {
+            Utils.bitmapToMat(crop, colorMat)
+            Imgproc.cvtColor(colorMat, rgbMat, Imgproc.COLOR_RGBA2RGB)
+
+            var redPixels = 0
+            val totalPixels = maxOf(1, rgbMat.rows() * rgbMat.cols())
+            for (row in 0 until rgbMat.rows()) {
+                for (col in 0 until rgbMat.cols()) {
+                    val pixel = rgbMat.get(row, col) ?: continue
+                    val red = pixel.getOrNull(0) ?: continue
+                    val green = pixel.getOrNull(1) ?: 0.0
+                    val blue = pixel.getOrNull(2) ?: 0.0
+                    if (red > green + SUIT_RED_DOMINANCE_MIN && red > blue + SUIT_RED_DOMINANCE_MIN) {
+                        redPixels += 1
+                    }
+                }
+            }
+
+            val redRatio = redPixels.toDouble() / totalPixels.toDouble()
+            if (redRatio >= SUIT_RED_PIXEL_RATIO_THRESHOLD) RED_SUIT_NAMES else BLACK_SUIT_NAMES
+        } finally {
+            crop.recycle()
+            colorMat.release()
+            rgbMat.release()
+        }
     }
 
     private fun stabilizeHeroCard(label: String, detectedName: String?): String? {
@@ -658,20 +787,32 @@ class MediaProjectionService : Service() {
     private fun logHeroCardMatch(
         label: String,
         rect: Rect,
-        match: CardMatchResult,
+        suitRect: Rect?,
+        rankMatch: CardMatchResult,
+        suitMatch: CardMatchResult?,
         stableName: String?
     ) {
-        val top3 = if (match.topMatches.isEmpty()) {
+        val rankTop3 = if (rankMatch.topMatches.isEmpty()) {
             "-"
         } else {
-            match.topMatches.joinToString(", ") { candidate ->
+            rankMatch.topMatches.joinToString(", ") { candidate ->
+                "${candidate.name}=${"%.4f".format(candidate.score)}"
+            }
+        }
+        val suitTop3 = if (suitMatch?.topMatches.isNullOrEmpty()) {
+            "-"
+        } else {
+            suitMatch?.topMatches.orEmpty().joinToString(", ") { candidate ->
                 "${candidate.name}=${"%.4f".format(candidate.score)}"
             }
         }
         Log.d(
             TAG,
             "Hero match $label rect=[${rect.left},${rect.top},${rect.right},${rect.bottom}] " +
-                "top3=$top3 raw=${match.acceptedName ?: "-"} stable=${stableName ?: "-"}"
+                "suitRect=${suitRect?.let { "[${it.left},${it.top},${it.right},${it.bottom}]" } ?: "-"} " +
+                "rankTop3=$rankTop3 rankRaw=${rankMatch.acceptedName ?: "-"} " +
+                "suitTop3=$suitTop3 suitRaw=${suitMatch?.acceptedName ?: "-"} " +
+                "stable=${stableName ?: "-"}"
         )
     }
 
@@ -1503,8 +1644,10 @@ class MediaProjectionService : Service() {
         overlayView?.let { windowManager?.removeView(it) }
         virtualDisplay?.release(); imageReader?.close(); mediaProjection?.stop(); recognizer.close()
         socketExecutor.shutdownNow()
-        loadedTemplatesBoard.forEach { it.mat.release() }
-        loadedTemplatesHero.forEach { it.mat.release() }
+        loadedRankTemplatesBoard.forEach { it.mat.release() }
+        loadedRankTemplatesHero.forEach { it.mat.release() }
+        loadedSuitTemplatesBoard.forEach { it.mat.release() }
+        loadedSuitTemplatesHero.forEach { it.mat.release() }
         coveredCardTemplate?.mat?.release()
         dealerButtonTemplate?.mat?.release()
         super.onDestroy()

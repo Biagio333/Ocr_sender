@@ -1717,8 +1717,8 @@ class SmartParametricBot:
             raise_threshold -= 0.02
             call_threshold -= 0.02
         elif street == "river":
-            raise_threshold += 0.08
-            call_threshold += 0.10
+            raise_threshold += 0.03
+            call_threshold += 0.08
 
         if unknown_opponents > 0:
             raise_threshold += 0.04
@@ -1889,8 +1889,17 @@ class SmartParametricBot:
             if not hero_has_initiative:
                 return True
 
-        if info["straight_with_hole"] and board_texture in {"wet", "very_wet", "monotone", "paired_wet", "paired"}:
-            return True
+        if info["straight_with_hole"]:
+            if players_in_hand > 2 and not hero_has_initiative and board_texture in {"very_wet", "monotone", "paired_wet"}:
+                return True
+            if (
+                position in {"SB", "BB"}
+                and not hero_has_initiative
+                and board_texture in {"very_wet", "monotone", "paired_wet"}
+                and strength < 0.86
+            ):
+                return True
+            return False
 
         if players_in_hand > 2 and not hero_has_initiative and strength < 0.92:
             return True
@@ -2298,6 +2307,28 @@ class SmartParametricBot:
             street = _norm_text((stats_context or {}).get("street", ""))
             if call_amount == 0:
                 street_name = _norm_text((stats_context or {}).get("street", ""))
+                if street_name == "river":
+                    if any([
+                        info["straight_with_hole"],
+                        info["flush_with_hole"],
+                        info["full_house_with_hole"],
+                        info["quads_with_hole"],
+                        info["set_made"],
+                        info["trips_with_hole"],
+                        info["two_pair_with_hole"],
+                    ]):
+                        amount = self._raise_amount(
+                            state,
+                            stack,
+                            max(strength, 0.74 if players_in_hand > 2 else 0.78),
+                            "postflop",
+                            self._with_bet_profile(stats_context, "value_medium"),
+                        )
+                        if amount is not None:
+                            action = BotAction("raise", amount)
+                            self._record_stats_decision(action, stats_context)
+                            return action
+
                 if street_name in {"flop", "turn"}:
                     # Avoid the too-passive line where medium/strong hands auto-check
                     # before reaching the proactive value/semi-bluff logic below.

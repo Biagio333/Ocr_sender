@@ -240,12 +240,12 @@
       "label": "carte_hero_1",
       "points": [
         [
-          19.490886235072367,
-          1205.6432013408753
+          28.5,
+          1214.5
         ],
         [
-          71.24031007751941,
-          1294.031007751938
+          60.5,
+          1253.5
         ]
       ],
       "group_id": null,
@@ -636,12 +636,12 @@
       "label": "carte_hero_2",
       "points": [
         [
-          116.97674418604655,
-          1203.3333333333333
+          125.5,
+          1214.5
         ],
         [
-          175.11627906976744,
-          1296.3565891472867
+          164.5,
+          1258.0
         ]
       ],
       "group_id": null,
@@ -840,6 +840,42 @@
         [
           524.5,
           949.5
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "carte_hero_1_seme",
+      "points": [
+        [
+          27.0,
+          1252.0
+        ],
+        [
+          61.0,
+          1288.5
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "carte_hero_2_seme",
+      "points": [
+        [
+          126.5,
+          1252.5
+        ],
+        [
+          166.5,
+          1289.0
         ]
       ],
       "group_id": null,

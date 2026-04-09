@@ -23,13 +23,16 @@ from config import (
     ENABLE_BUTTON_DEBUG_LOGS,
     ENABLE_JSON_VIEWER,
     ENABLE_HERO_BOT,
+    IS_TOURNEI,
     HERO_BOT_KIND,
     HERO_BOT_PROFILE,
+    HERO_BOT_PROFILE_TOURNAMENT,
     HERO_BOT_PROFILE_ROTATION_ENABLED,
     HERO_BOT_PROFILE_ROTATION_HANDS_BASE,
     HERO_BOT_PROFILE_ROTATION_MULTIPLIER_MAX,
     HERO_BOT_PROFILE_ROTATION_MULTIPLIER_MIN,
     HERO_BOT_PROFILE_ROTATION_PROFILES,
+    HERO_BOT_PROFILE_ROTATION_PROFILES_TOURNAMENT,
     HERO_BOT_ADAPTIVE_PROFILE_ENABLED,
     HERO_BOT_ADAPTIVE_PROFILE_MIN_HANDS,
     HERO_BOT_ADAPTIVE_PROFILE_MIN_OPPONENTS,
@@ -117,6 +120,19 @@ def _log_cards_if_changed(
         print(f"Board cards  : {' '.join(current_board_cards) if current_board_cards else '-'}")
 
     return current_hero_cards, current_board_cards
+
+
+def _effective_hero_bot_profile() -> str:
+    return HERO_BOT_PROFILE_TOURNAMENT if IS_TOURNEI else HERO_BOT_PROFILE
+
+
+def _effective_rotation_profiles() -> list[str]:
+    profiles = (
+        HERO_BOT_PROFILE_ROTATION_PROFILES_TOURNAMENT
+        if IS_TOURNEI else
+        HERO_BOT_PROFILE_ROTATION_PROFILES
+    )
+    return list(profiles)
 
 
 def _fmt_amount(value: float) -> str:
@@ -1014,11 +1030,17 @@ def main():
     previous_logged_board_cards: tuple[str, ...] = ()
     analysis_session_hand_base = int(time.time() * 1_000_000)
     if ENABLE_HERO_BOT:
+        selected_profile = _effective_hero_bot_profile()
+        rotation_profiles = _effective_rotation_profiles()
+        print(
+            f"Hero bot profile: {selected_profile} "
+            f"(mode={'tournament' if IS_TOURNEI else 'cash'})"
+        )
         hero_bot = HeroBotBridge(
             bot_kind=HERO_BOT_KIND,
-            profile_name=HERO_BOT_PROFILE,
+            profile_name=selected_profile,
             rotation_enabled=HERO_BOT_PROFILE_ROTATION_ENABLED,
-            rotation_profiles=HERO_BOT_PROFILE_ROTATION_PROFILES,
+            rotation_profiles=rotation_profiles,
             rotation_hands_base=HERO_BOT_PROFILE_ROTATION_HANDS_BASE,
             rotation_multiplier_min=HERO_BOT_PROFILE_ROTATION_MULTIPLIER_MIN,
             rotation_multiplier_max=HERO_BOT_PROFILE_ROTATION_MULTIPLIER_MAX,

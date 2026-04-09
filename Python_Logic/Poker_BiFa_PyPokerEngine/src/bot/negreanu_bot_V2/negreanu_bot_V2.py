@@ -730,9 +730,11 @@ def _is_open_raise_candidate(
         and strength >= 0.64
         and players_in_hand <= 5
         and (
-            suited
-            or hi == rank_to_index("A")
+            hi == rank_to_index("A")
             or broadway_count >= 2
+            or (suited and hi >= rank_to_index("K") and lo >= rank_to_index("7") and gap <= 3)
+            or (suited and hi >= rank_to_index("Q") and lo >= rank_to_index("8") and gap <= 2)
+            or (suited and hi >= rank_to_index("9") and gap <= 1)
             or (broadway_count == 1 and lo >= rank_to_index("8") and gap <= 1)
         )
     ):
@@ -1882,12 +1884,21 @@ class SmartParametricBot:
             return False
 
         if info["trips_with_hole"]:
-            if players_in_hand > 2:
+            if players_in_hand > 2 and not hero_has_initiative and board_texture in {"very_wet", "monotone", "paired_wet"}:
                 return True
-            if position in {"SB", "BB"} and board_texture in {"wet", "very_wet", "monotone", "paired", "paired_wet"}:
+            if (
+                position in {"SB", "BB"}
+                and not hero_has_initiative
+                and board_texture in {"very_wet", "monotone", "paired_wet"}
+                and strength < 0.84
+            ):
                 return True
-            if not hero_has_initiative:
+            return False
+
+        if info["two_pair_with_hole"]:
+            if players_in_hand > 2 and not hero_has_initiative and board_texture in {"very_wet", "monotone", "paired_wet"}:
                 return True
+            return False
 
         if info["straight_with_hole"]:
             if players_in_hand > 2 and not hero_has_initiative and board_texture in {"very_wet", "monotone", "paired_wet"}:
@@ -1931,9 +1942,18 @@ class SmartParametricBot:
         street = _norm_text((stats_context or {}).get("street", ""))
         raise_count = _safe_int((stats_context or {}).get("raise_count_before_action", 0), 0)
         board_texture = info["board_texture"]
+        position = _norm_pos((stats_context or {}).get("position", ""))
+        hero_has_initiative = bool((stats_context or {}).get("hero_has_initiative", False))
+        preflop_aggressor_position = _norm_pos((stats_context or {}).get("preflop_aggressor_position", ""))
         big_bet = call_ratio >= 0.16 or (pot > 0 and (call_amount / max(pot, 1.0)) >= 0.45)
         medium_bet = call_ratio >= 0.10 or (pot > 0 and (call_amount / max(pot, 1.0)) >= 0.28)
         scary_board = board_texture in {"wet", "very_wet", "monotone", "paired", "paired_wet"}
+        blind_defend_heads_up = (
+            players_in_hand <= 2
+            and position in {"SB", "BB"}
+            and not hero_has_initiative
+            and preflop_aggressor_position in {"BTN", "CO", "SB"}
+        )
 
         if _has_strong_made_hand(info):
             return False
@@ -1970,6 +1990,24 @@ class SmartParametricBot:
         if info["weak_pair"] and street == "flop" and cheap_continue and players_in_hand <= 2:
             return False
 
+        if blind_defend_heads_up:
+            if info["top_pair"] and street in {"flop", "turn"} and not big_bet:
+                return False
+            if (
+                info["second_pair"]
+                and street in {"flop", "turn"}
+                and (info["flush_draw_with_hole"] or info["straight_draw_with_hole"] or info["kicker_strength"] >= 0.40)
+                and not big_bet
+            ):
+                return False
+            if (
+                info["weak_pair"]
+                and street == "flop"
+                and (info["flush_draw_with_hole"] or info["straight_draw_with_hole"])
+                and cheap_continue
+            ):
+                return False
+
         if players_in_hand > 2 and medium_bet and not info["top_pair"]:
             return True
 
@@ -1986,6 +2024,8 @@ class SmartParametricBot:
                     return False
                 return players_in_hand > 2 or big_bet or scary_board
             if info["top_pair"] and info["kicker_strength"] < 0.62:
+                if blind_defend_heads_up and not big_bet:
+                    return False
                 if cheap_continue:
                     return False
                 return big_bet and scary_board
@@ -2355,6 +2395,15 @@ class SmartParametricBot:
 
         if strength >= call_threshold:
             street = _norm_text((stats_context or {}).get("street", ""))
+            position = _norm_pos((stats_context or {}).get("position", ""))
+            hero_has_initiative = bool((stats_context or {}).get("hero_has_initiative", False))
+            preflop_aggressor_position = _norm_pos((stats_context or {}).get("preflop_aggressor_position", ""))
+            blind_defend_heads_up = (
+                players_in_hand <= 2
+                and position in {"SB", "BB"}
+                and not hero_has_initiative
+                and preflop_aggressor_position in {"BTN", "CO", "SB"}
+            )
             if call_amount == 0:
                 street_name = _norm_text((stats_context or {}).get("street", ""))
                 if street_name == "river":
@@ -2543,7 +2592,11 @@ class SmartParametricBot:
                 self._record_stats_decision(action, stats_context)
                 return action
 
-            if info["top_pair"] and info["kicker_strength"] < 0.45 and call_ratio > 0.16:
+            if (
+                info["top_pair"]
+                and info["kicker_strength"] < 0.45
+                and call_ratio > (0.22 if blind_defend_heads_up else 0.16)
+            ):
                 action = BotAction("fold")
                 self._record_stats_decision(action, stats_context)
                 return action

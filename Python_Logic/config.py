@@ -5,7 +5,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 # Modalita disponibili: "socket" oppure "replay"
 DATA_SOURCE = "socket"
-IS_TOURNEI = False 
+IS_TOURNEI = True  
 # Salvataggio pacchetti ricevuti in live
 SAVE_INCOMING_PACKETS = True
 PACKET_SAVE_DIR = BASE_DIR / "packets_cash.db"
@@ -36,11 +36,16 @@ OLLAMA_TIMEOUT_SEC = 8.0
 
 #HERO_BOT_PROFILE = "blind_stealer"
 HERO_BOT_PROFILE = "live_exploiter"
+HERO_BOT_PROFILE_TOURNAMENT = "tag_grinder"
 HERO_BOT_PROFILE_ROTATION_ENABLED = False
 HERO_BOT_PROFILE_ROTATION_PROFILES = [
     "live_exploiter",
     "balanced_reg",
     "sticky_postflop",
+]
+HERO_BOT_PROFILE_ROTATION_PROFILES_TOURNAMENT = [
+    "tag_grinder",
+    "balanced_reg",
 ]
 HERO_BOT_PROFILE_ROTATION_HANDS_BASE = 10
 HERO_BOT_PROFILE_ROTATION_MULTIPLIER_MIN = 1

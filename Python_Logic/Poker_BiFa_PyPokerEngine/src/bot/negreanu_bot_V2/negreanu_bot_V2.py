@@ -132,26 +132,26 @@ def make_profile(profile_name: str) -> negreanu_V2_BotConfig:
     if name == "tag_grinder":
         return negreanu_V2_BotConfig(
             name="tag_grinder",
-            aggression=0.66,
-            looseness=0.52,
-            preflop_raise_threshold=0.67,
-            preflop_call_threshold=0.40,
-            postflop_raise_threshold=0.74,
-            postflop_call_threshold=0.45,
-            cheap_call_bonus=0.08,
-            draw_bonus=0.10,
+            aggression=0.68,
+            looseness=0.55,
+            preflop_raise_threshold=0.65,
+            preflop_call_threshold=0.39,
+            postflop_raise_threshold=0.73,
+            postflop_call_threshold=0.44,
+            cheap_call_bonus=0.09,
+            draw_bonus=0.11,
             top_pair_bonus=0.10,
             overpair_bonus=0.16,
             set_bonus=0.20,
             combo_draw_bonus=0.11,
             nut_flush_draw_bonus=0.05,
-            steal_bonus_late=0.06,
+            steal_bonus_late=0.08,
             isolate_bonus=0.05,
-            short_stack_push_bonus=0.06,
+            short_stack_push_bonus=0.08,
             big_stack_bully_bonus=0.05,
             cbet_bonus_dry=0.06,
             second_barrel_scare_bonus=0.04,
-            fold_vs_heavy_resistance_penalty=0.09,
+            fold_vs_heavy_resistance_penalty=0.08,
         )
 
     if name == "balanced_reg":
@@ -763,6 +763,31 @@ def _is_value_reraise_candidate(
     return strength >= 0.86
 
 
+def _is_premium_preflop_reraise_candidate(
+    cards,
+    position: str,
+    effective_stack_bb: float,
+    players_in_hand: int,
+) -> bool:
+    hi, lo, suited, pair, gap = _hole_features(cards)
+    if pair and hi >= rank_to_index("Q"):
+        return True
+    if pair and hi >= rank_to_index("T") and players_in_hand >= 4:
+        return True
+    if hi == rank_to_index("A") and lo >= rank_to_index("K"):
+        return True
+    if hi == rank_to_index("A") and suited and lo >= rank_to_index("Q") and players_in_hand >= 4:
+        return True
+    if (
+        _is_blind(position)
+        and effective_stack_bb >= 18
+        and hi == rank_to_index("A")
+        and lo >= rank_to_index("J")
+    ):
+        return True
+    return False
+
+
 def _is_flat_call_candidate(
     cards,
     position: str,
@@ -770,7 +795,9 @@ def _is_flat_call_candidate(
     strength: float,
 ) -> bool:
     hi, lo, suited, pair, gap = _hole_features(cards)
-    button = _norm_pos(position) == "BTN"
+    pos = _norm_pos(position)
+    button = pos == "BTN"
+    blind = pos in {"SB", "BB"}
     if pair:
         if hi >= rank_to_index("2") and not _is_early_position(position):
             return True
@@ -779,9 +806,13 @@ def _is_flat_call_candidate(
         if suited:
             if button:
                 return lo >= rank_to_index("2")
+            if blind:
+                return lo >= rank_to_index("2")
             return lo >= rank_to_index("5")
         if button:
             return lo >= rank_to_index("5")
+        if blind:
+            return lo >= rank_to_index("7")
         return lo >= rank_to_index("9")
     if hi >= rank_to_index("K") and lo >= rank_to_index("Q"):
         return True
@@ -797,6 +828,12 @@ def _is_flat_call_candidate(
         return True
     if _is_blind(position) and suited and hi >= rank_to_index("9") and lo >= rank_to_index("7") and gap <= 2:
         return True
+    if _is_blind(position) and suited and hi >= rank_to_index("K") and lo >= rank_to_index("7") and gap <= 3:
+        return True
+    if _is_blind(position) and suited and hi >= rank_to_index("Q") and lo >= rank_to_index("7") and gap <= 3 and effective_stack_bb >= 16:
+        return True
+    if _is_blind(position) and suited and hi >= rank_to_index("8") and lo >= rank_to_index("5") and gap <= 2 and effective_stack_bb >= 20:
+        return True
     if _is_blind(position) and hi == rank_to_index("A") and lo >= rank_to_index("7"):
         return True
     if _is_blind(position) and hi >= rank_to_index("K") and lo >= rank_to_index("T") and gap <= 2:
@@ -807,6 +844,8 @@ def _is_flat_call_candidate(
         return False
     if not suited and hi == rank_to_index("J") and lo < rank_to_index("T"):
         return False
+    if blind and effective_stack_bb >= 18:
+        return strength >= 0.68
     return strength >= 0.72
 
 
@@ -849,6 +888,79 @@ def _is_blind_defend_continue_candidate(
     if suited and hi >= rank_to_index("8") and lo >= rank_to_index("5") and gap <= 2 and effective_stack_bb >= 18:
         return True
     return strength >= 0.62 and suited and gap <= 1 and hi >= rank_to_index("T")
+
+
+def _is_heads_up_shortstack_push_candidate(
+    cards,
+    position: str,
+    effective_stack_bb: float,
+    strength: float,
+) -> bool:
+    hi, lo, suited, pair, gap = _hole_features(cards)
+    pos = _norm_pos(position)
+    if pair:
+        return True
+    if hi == rank_to_index("A"):
+        return True
+    if hi >= rank_to_index("K") and lo >= rank_to_index("8"):
+        return True
+    if hi >= rank_to_index("Q") and lo >= rank_to_index("9"):
+        return True
+    if hi >= rank_to_index("J") and lo >= rank_to_index("9") and gap <= 1:
+        return True
+    if suited and hi >= rank_to_index("K") and lo >= rank_to_index("5"):
+        return True
+    if suited and hi >= rank_to_index("Q") and lo >= rank_to_index("7") and gap <= 3:
+        return True
+    if suited and hi >= rank_to_index("J") and lo >= rank_to_index("7") and gap <= 2:
+        return True
+    if suited and hi >= rank_to_index("9") and lo >= rank_to_index("6") and gap <= 2:
+        return True
+    if pos == "BTN" and effective_stack_bb <= 8:
+        if hi >= rank_to_index("K") and lo >= rank_to_index("5"):
+            return True
+        if hi >= rank_to_index("Q") and lo >= rank_to_index("7"):
+            return True
+        if hi >= rank_to_index("T") and lo >= rank_to_index("8") and gap <= 2:
+            return True
+        if suited and hi >= rank_to_index("8") and lo >= rank_to_index("4") and gap <= 3:
+            return True
+    return strength >= (0.56 if pos == "BTN" else 0.62)
+
+
+def _is_heads_up_shortstack_continue_candidate(
+    cards,
+    position: str,
+    effective_stack_bb: float,
+    call_ratio: float,
+    strength: float,
+) -> bool:
+    hi, lo, suited, pair, gap = _hole_features(cards)
+    pos = _norm_pos(position)
+    if pair:
+        return True
+    if hi == rank_to_index("A"):
+        return True
+    if hi >= rank_to_index("K") and lo >= rank_to_index("T") and gap <= 2:
+        return True
+    if hi >= rank_to_index("Q") and lo >= rank_to_index("J"):
+        return True
+    if hi >= rank_to_index("Q") and lo >= rank_to_index("T") and gap <= 1 and call_ratio <= 0.60:
+        return True
+    if suited and hi >= rank_to_index("K") and lo >= rank_to_index("8") and gap <= 3:
+        return True
+    if suited and hi >= rank_to_index("Q") and lo >= rank_to_index("8") and gap <= 2:
+        return True
+    if suited and hi >= rank_to_index("J") and lo >= rank_to_index("8") and gap <= 2:
+        return True
+    if pos == "BTN" and effective_stack_bb <= 6:
+        if hi >= rank_to_index("K") and lo >= rank_to_index("7"):
+            return True
+        if hi >= rank_to_index("Q") and lo >= rank_to_index("8"):
+            return True
+        if suited and hi >= rank_to_index("9") and lo >= rank_to_index("6") and gap <= 2:
+            return True
+    return strength >= 0.68 and call_ratio <= 0.70
 
 
 # =========================================================
@@ -2070,8 +2182,29 @@ class SmartParametricBot:
             strength = self._adapt_preflop_strength(strength, stats_context, call_ratio)
 
             raise_threshold, call_threshold = self._preflop_thresholds(stats_context)
+            heads_up_short = players_in_hand <= 2 and 0 < effective_stack_bb <= 12
 
             if 0 < effective_stack_bb <= 12:
+                if (
+                    heads_up_short
+                    and raise_count == 0
+                    and _is_heads_up_shortstack_push_candidate(
+                        hole_cards,
+                        position,
+                        effective_stack_bb,
+                        strength,
+                    )
+                ):
+                    amount = self._raise_amount(state, stack, max(strength, 0.72), "preflop", stats_context)
+                    if amount is not None:
+                        action = BotAction("raise", amount)
+                        self._record_stats_decision(action, stats_context)
+                        return action
+                    if call_amount > 0 and call_ratio <= 0.75:
+                        action = BotAction("call", call_amount)
+                        self._record_stats_decision(action, stats_context)
+                        return action
+
                 if raise_count == 0 and strength >= max(0.58, raise_threshold - 0.06):
                     if not _is_open_raise_candidate(hole_cards, position, effective_stack_bb, players_in_hand, strength):
                         action = self._passive_action(call_amount) if call_amount == 0 else BotAction("fold")
@@ -2084,6 +2217,30 @@ class SmartParametricBot:
                         return action
 
                 if raise_count >= 1:
+                    if (
+                        heads_up_short
+                        and call_amount > 0
+                        and _is_heads_up_shortstack_continue_candidate(
+                            hole_cards,
+                            position,
+                            effective_stack_bb,
+                            call_ratio,
+                            strength,
+                        )
+                    ):
+                        if max(
+                            _safe_int(_safe_get(state, "max_completion_betting_or_raising_to_amount", 0), 0),
+                            _safe_int(_safe_get(state, "min_completion_betting_or_raising_to_amount", 0), 0),
+                        ) > 0 and call_ratio <= 0.75:
+                            amount = self._raise_amount(state, stack, max(strength, 0.78), "preflop", stats_context)
+                            if amount is not None:
+                                action = BotAction("raise", amount)
+                                self._record_stats_decision(action, stats_context)
+                                return action
+                        action = BotAction("call", call_amount)
+                        self._record_stats_decision(action, stats_context)
+                        return action
+
                     if strength >= 0.86 and _is_value_reraise_candidate(hole_cards, effective_stack_bb, strength):
                         amount = self._raise_amount(state, stack, max(strength, 0.82), "preflop", stats_context)
                         if amount is not None:
@@ -2194,6 +2351,24 @@ class SmartParametricBot:
 
             if raise_count == 1:
                 pocket_pair = _is_pocket_pair(hole_cards)
+                if _is_premium_preflop_reraise_candidate(
+                    hole_cards,
+                    position,
+                    effective_stack_bb,
+                    players_in_hand,
+                ):
+                    amount = self._raise_amount(
+                        state,
+                        stack,
+                        max(strength, 0.82 if players_in_hand >= 4 else 0.78),
+                        "preflop",
+                        stats_context,
+                    )
+                    if amount is not None:
+                        action = BotAction("raise", amount)
+                        self._record_stats_decision(action, stats_context)
+                        return action
+
                 if (
                     call_amount > 0
                     and pocket_pair

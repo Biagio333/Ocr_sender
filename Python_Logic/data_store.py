@@ -103,61 +103,68 @@ class HeroDecisionStore:
             )
 
     def save_decision(self, decision_row: dict) -> int:
-        with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO hero_decisions(
-                    payload_timestamp,
-                    hand_id,
-                    street,
-                    position,
-                    hero_cards,
-                    board_cards,
-                    hero_stack,
-                    hero_bet,
-                    call_amount,
-                    min_raise_to,
-                    max_raise_to,
-                    action_kind,
-                    action_amount,
-                    source_action_player,
-                    source_action_kind,
-                    has_red_action_area,
-                    red_action_area_avg_red,
-                    available_actions_json,
-                    amount_buttons_json,
-                    selected_action_button_json,
-                    selected_amount_button_json,
-                    payload_json
-                )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    decision_row.get("payload_timestamp"),
-                    decision_row.get("hand_id"),
-                    decision_row.get("street"),
-                    decision_row.get("position"),
-                    decision_row.get("hero_cards"),
-                    decision_row.get("board_cards"),
-                    decision_row.get("hero_stack"),
-                    decision_row.get("hero_bet"),
-                    decision_row.get("call_amount"),
-                    decision_row.get("min_raise_to"),
-                    decision_row.get("max_raise_to"),
-                    decision_row.get("action_kind"),
-                    decision_row.get("action_amount"),
-                    decision_row.get("source_action_player"),
-                    decision_row.get("source_action_kind"),
-                    1 if decision_row.get("has_red_action_area") else 0,
-                    decision_row.get("red_action_area_avg_red"),
-                    json.dumps(decision_row.get("available_actions", []), ensure_ascii=False),
-                    json.dumps(decision_row.get("amount_buttons", []), ensure_ascii=False),
-                    json.dumps(decision_row.get("selected_action_button"), ensure_ascii=False),
-                    json.dumps(decision_row.get("selected_amount_button"), ensure_ascii=False),
-                    json.dumps(decision_row.get("payload", {}), ensure_ascii=False),
-                ),
+        params = (
+            decision_row.get("payload_timestamp"),
+            decision_row.get("hand_id"),
+            decision_row.get("street"),
+            decision_row.get("position"),
+            decision_row.get("hero_cards"),
+            decision_row.get("board_cards"),
+            decision_row.get("hero_stack"),
+            decision_row.get("hero_bet"),
+            decision_row.get("call_amount"),
+            decision_row.get("min_raise_to"),
+            decision_row.get("max_raise_to"),
+            decision_row.get("action_kind"),
+            decision_row.get("action_amount"),
+            decision_row.get("source_action_player"),
+            decision_row.get("source_action_kind"),
+            1 if decision_row.get("has_red_action_area") else 0,
+            decision_row.get("red_action_area_avg_red"),
+            json.dumps(decision_row.get("available_actions", []), ensure_ascii=False),
+            json.dumps(decision_row.get("amount_buttons", []), ensure_ascii=False),
+            json.dumps(decision_row.get("selected_action_button"), ensure_ascii=False),
+            json.dumps(decision_row.get("selected_amount_button"), ensure_ascii=False),
+            json.dumps(decision_row.get("payload", {}), ensure_ascii=False),
+        )
+        sql = """
+            INSERT INTO hero_decisions(
+                payload_timestamp,
+                hand_id,
+                street,
+                position,
+                hero_cards,
+                board_cards,
+                hero_stack,
+                hero_bet,
+                call_amount,
+                min_raise_to,
+                max_raise_to,
+                action_kind,
+                action_amount,
+                source_action_player,
+                source_action_kind,
+                has_red_action_area,
+                red_action_area_avg_red,
+                available_actions_json,
+                amount_buttons_json,
+                selected_action_button_json,
+                selected_amount_button_json,
+                payload_json
             )
-            return int(cursor.lastrowid)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        try:
+            with self._connect() as conn:
+                cursor = conn.execute(sql, params)
+                return int(cursor.lastrowid)
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            self._ensure_schema()
+            with self._connect() as conn:
+                cursor = conn.execute(sql, params)
+                return int(cursor.lastrowid)
 
 
 class HandHistoryStore:
@@ -208,88 +215,94 @@ class HandHistoryStore:
         if hand_id is None:
             raise ValueError("hand_id is required")
 
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO hand_history(
-                    hand_id,
-                    first_payload_timestamp,
-                    last_payload_timestamp,
-                    street,
-                    hero_position,
-                    hero_cards,
-                    board_cards,
-                    hero_stack,
-                    hero_bet,
-                    pot_amount,
-                    hero_action_kind,
-                    hero_action_amount,
-                    source_action_player,
-                    source_action_kind,
-                    winner_seat,
-                    winner_name,
-                    payload_json
-                )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(hand_id) DO UPDATE SET
-                    updated_at = CURRENT_TIMESTAMP,
-                    first_payload_timestamp = COALESCE(hand_history.first_payload_timestamp, excluded.first_payload_timestamp),
-                    last_payload_timestamp = COALESCE(excluded.last_payload_timestamp, hand_history.last_payload_timestamp),
-                    street = CASE
-                        WHEN excluded.street IS NULL OR excluded.street = '' THEN hand_history.street
-                        WHEN hand_history.street IS NULL OR hand_history.street = '' THEN excluded.street
-                        WHEN excluded.street = 'river' THEN excluded.street
-                        WHEN excluded.street = 'turn' AND hand_history.street IN ('preflop', 'flop', 'unknown') THEN excluded.street
-                        WHEN excluded.street = 'flop' AND hand_history.street IN ('preflop', 'unknown') THEN excluded.street
-                        WHEN excluded.street = 'preflop' AND hand_history.street = 'unknown' THEN excluded.street
-                        ELSE hand_history.street
-                    END,
-                    hero_position = CASE
-                        WHEN excluded.hero_position IS NOT NULL AND excluded.hero_position != '' THEN excluded.hero_position
-                        ELSE hand_history.hero_position
-                    END,
-                    hero_cards = CASE
-                        WHEN excluded.hero_cards IS NOT NULL AND excluded.hero_cards != '[]' THEN excluded.hero_cards
-                        ELSE hand_history.hero_cards
-                    END,
-                    board_cards = CASE
-                        WHEN excluded.board_cards IS NOT NULL AND excluded.board_cards != '[]' THEN excluded.board_cards
-                        ELSE hand_history.board_cards
-                    END,
-                    hero_stack = COALESCE(excluded.hero_stack, hand_history.hero_stack),
-                    hero_bet = COALESCE(excluded.hero_bet, hand_history.hero_bet),
-                    pot_amount = COALESCE(excluded.pot_amount, hand_history.pot_amount),
-                    hero_action_kind = COALESCE(excluded.hero_action_kind, hand_history.hero_action_kind),
-                    hero_action_amount = COALESCE(excluded.hero_action_amount, hand_history.hero_action_amount),
-                    source_action_player = COALESCE(excluded.source_action_player, hand_history.source_action_player),
-                    source_action_kind = COALESCE(excluded.source_action_kind, hand_history.source_action_kind),
-                    winner_seat = COALESCE(excluded.winner_seat, hand_history.winner_seat),
-                    winner_name = CASE
-                        WHEN excluded.winner_name IS NOT NULL AND excluded.winner_name != '' THEN excluded.winner_name
-                        ELSE hand_history.winner_name
-                    END,
-                    payload_json = excluded.payload_json
-                """,
-                (
-                    hand_id,
-                    hand_row.get("first_payload_timestamp"),
-                    hand_row.get("last_payload_timestamp"),
-                    hand_row.get("street"),
-                    hand_row.get("hero_position"),
-                    hand_row.get("hero_cards"),
-                    hand_row.get("board_cards"),
-                    hand_row.get("hero_stack"),
-                    hand_row.get("hero_bet"),
-                    hand_row.get("pot_amount"),
-                    hand_row.get("hero_action_kind"),
-                    hand_row.get("hero_action_amount"),
-                    hand_row.get("source_action_player"),
-                    hand_row.get("source_action_kind"),
-                    hand_row.get("winner_seat"),
-                    hand_row.get("winner_name"),
-                    json.dumps(hand_row.get("payload", {}), ensure_ascii=False),
-                ),
+        params = (
+            hand_id,
+            hand_row.get("first_payload_timestamp"),
+            hand_row.get("last_payload_timestamp"),
+            hand_row.get("street"),
+            hand_row.get("hero_position"),
+            hand_row.get("hero_cards"),
+            hand_row.get("board_cards"),
+            hand_row.get("hero_stack"),
+            hand_row.get("hero_bet"),
+            hand_row.get("pot_amount"),
+            hand_row.get("hero_action_kind"),
+            hand_row.get("hero_action_amount"),
+            hand_row.get("source_action_player"),
+            hand_row.get("source_action_kind"),
+            hand_row.get("winner_seat"),
+            hand_row.get("winner_name"),
+            json.dumps(hand_row.get("payload", {}), ensure_ascii=False),
+        )
+        sql = """
+            INSERT INTO hand_history(
+                hand_id,
+                first_payload_timestamp,
+                last_payload_timestamp,
+                street,
+                hero_position,
+                hero_cards,
+                board_cards,
+                hero_stack,
+                hero_bet,
+                pot_amount,
+                hero_action_kind,
+                hero_action_amount,
+                source_action_player,
+                source_action_kind,
+                winner_seat,
+                winner_name,
+                payload_json
             )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(hand_id) DO UPDATE SET
+                updated_at = CURRENT_TIMESTAMP,
+                first_payload_timestamp = COALESCE(hand_history.first_payload_timestamp, excluded.first_payload_timestamp),
+                last_payload_timestamp = COALESCE(excluded.last_payload_timestamp, hand_history.last_payload_timestamp),
+                street = CASE
+                    WHEN excluded.street IS NULL OR excluded.street = '' THEN hand_history.street
+                    WHEN hand_history.street IS NULL OR hand_history.street = '' THEN excluded.street
+                    WHEN excluded.street = 'river' THEN excluded.street
+                    WHEN excluded.street = 'turn' AND hand_history.street IN ('preflop', 'flop', 'unknown') THEN excluded.street
+                    WHEN excluded.street = 'flop' AND hand_history.street IN ('preflop', 'unknown') THEN excluded.street
+                    WHEN excluded.street = 'preflop' AND hand_history.street = 'unknown' THEN excluded.street
+                    ELSE hand_history.street
+                END,
+                hero_position = CASE
+                    WHEN excluded.hero_position IS NOT NULL AND excluded.hero_position != '' THEN excluded.hero_position
+                    ELSE hand_history.hero_position
+                END,
+                hero_cards = CASE
+                    WHEN excluded.hero_cards IS NOT NULL AND excluded.hero_cards != '[]' THEN excluded.hero_cards
+                    ELSE hand_history.hero_cards
+                END,
+                board_cards = CASE
+                    WHEN excluded.board_cards IS NOT NULL AND excluded.board_cards != '[]' THEN excluded.board_cards
+                    ELSE hand_history.board_cards
+                END,
+                hero_stack = COALESCE(excluded.hero_stack, hand_history.hero_stack),
+                hero_bet = COALESCE(excluded.hero_bet, hand_history.hero_bet),
+                pot_amount = COALESCE(excluded.pot_amount, hand_history.pot_amount),
+                hero_action_kind = COALESCE(excluded.hero_action_kind, hand_history.hero_action_kind),
+                hero_action_amount = COALESCE(excluded.hero_action_amount, hand_history.hero_action_amount),
+                source_action_player = COALESCE(excluded.source_action_player, hand_history.source_action_player),
+                source_action_kind = COALESCE(excluded.source_action_kind, hand_history.source_action_kind),
+                winner_seat = COALESCE(excluded.winner_seat, hand_history.winner_seat),
+                winner_name = CASE
+                    WHEN excluded.winner_name IS NOT NULL AND excluded.winner_name != '' THEN excluded.winner_name
+                    ELSE hand_history.winner_name
+                END,
+                payload_json = excluded.payload_json
+        """
+        try:
+            with self._connect() as conn:
+                conn.execute(sql, params)
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            self._ensure_schema()
+            with self._connect() as conn:
+                conn.execute(sql, params)
         return int(hand_id)
 
 

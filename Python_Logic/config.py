@@ -7,7 +7,10 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_SOURCE = "socket"
 IS_TOURNEI = True  
 # Salvataggio pacchetti ricevuti in live
-SAVE_INCOMING_PACKETS = True
+if DATA_SOURCE == "replay":
+    SAVE_INCOMING_PACKETS =False
+else:
+    SAVE_INCOMING_PACKETS = True
 PACKET_SAVE_DIR = BASE_DIR / "packets_cash.db"
 ANALYSIS_DB_PATH = BASE_DIR / "analysis_cash.db"
 

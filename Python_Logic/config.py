@@ -4,7 +4,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 
 # Modalita disponibili: "socket" oppure "replay"
-DATA_SOURCE = "socket"
+DATA_SOURCE = "replay"
 IS_TOURNEI = True  
 # Salvataggio pacchetti ricevuti in live
 if DATA_SOURCE == "replay":

@@ -2183,6 +2183,24 @@ class SmartParametricBot:
 
             raise_threshold, call_threshold = self._preflop_thresholds(stats_context)
             heads_up_short = players_in_hand <= 2 and 0 < effective_stack_bb <= 12
+            no_raise_available = (
+                call_amount > 0
+                and max(
+                    _safe_int(_safe_get(state, "max_completion_betting_or_raising_to_amount", 0), 0),
+                    _safe_int(_safe_get(state, "min_completion_betting_or_raising_to_amount", 0), 0),
+                ) <= 0
+            )
+
+            if no_raise_available:
+                premium_short_stack_call = (
+                    strength >= 0.90
+                    or (0 < effective_stack_bb <= 20 and strength >= 0.80)
+                    or (0 < effective_stack_bb <= 12 and strength >= 0.72)
+                )
+                if premium_short_stack_call:
+                    action = BotAction("call", call_amount)
+                    self._record_stats_decision(action, stats_context)
+                    return action
 
             if 0 < effective_stack_bb <= 12:
                 if (
@@ -2509,6 +2527,35 @@ class SmartParametricBot:
             stats_context,
             self._pick_postflop_bet_profile(info, stats_context, call_amount),
         )
+        postflop_street = _norm_text((stats_context or {}).get("street", ""))
+
+        short_stack_committed_postflop = (
+            call_amount > 0
+            and players_in_hand <= 2
+            and postflop_street in {"flop", "turn"}
+            and 0 < effective_stack_bb <= 12
+            and (
+                call_ratio >= 0.45
+                or (pot > 0 and (call_amount / max(pot, 1.0)) <= 0.40)
+            )
+        )
+
+        if short_stack_committed_postflop:
+            if info["overpair"] or info["top_pair"]:
+                action = self._passive_action(call_amount)
+                self._record_stats_decision(action, stats_context)
+                return action
+            if (
+                info["second_pair"]
+                and (
+                    info["flush_draw_with_hole"]
+                    or info["straight_draw_with_hole"]
+                    or call_ratio <= 0.70
+                )
+            ):
+                action = self._passive_action(call_amount)
+                self._record_stats_decision(action, stats_context)
+                return action
 
         if self._should_check_back_river(info, stats_context, strength, call_amount):
             action = self._passive_action(call_amount)

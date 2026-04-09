@@ -753,13 +753,14 @@ class HeroBotBridge:
         active = []
         hero_has_cards = len(table.hero_cards) == 2
         for player in table.players:
+            stack_amount = float(player.stack_amount or 0.0)
             if player.player_index == HERO_SEAT and hero_has_cards:
                 active.append(player.player_index)
             elif player.has_covered_card:
                 active.append(player.player_index)
-            elif player.has_dealer_button:
+            elif player.has_dealer_button and stack_amount > 0.0:
                 active.append(player.player_index)
-            elif float(player.stack_amount or 0.0) > 0.0:
+            elif stack_amount > 0.0:
                 active.append(player.player_index)
         return active
 
